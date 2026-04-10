@@ -1,0 +1,19 @@
+# ---[ Ignored /app files ]---
+
+# Default ignored files
+/app/.idea/shelf/
+/app/.idea/workspace.xml
+
+
+# ---[ Ignored /firmware files ]---
+
+# Default ignored files
+/firmware/.idea/shelf/
+/firmware/.idea/workspace.xml
+# Editor-based HTTP Client requests
+/firmware/.idea/httpRequests/
+# Ignored default folder with query files
+/firmware/.idea/queries/
+# Datasource local storage ignored files
+/firmware/.idea/dataSources/
+/firmware/.idea/dataSources.local.xml
