@@ -353,7 +353,7 @@ fun MainScreen(
                 ArcCompass(heading = heading, color = darkBlack)
 
                 Text(
-                    text = "${((heading % 360f + 360f) % 360f).roundToInt()}°",
+                    text = "${(ceil(((heading % 360f + 360f) % 360f).toDouble()).toInt() % 360)}°",
                     fontFamily = font,
                     fontSize = (titleTextSize.value + 4).sp,
                     fontWeight = FontWeight.Bold,
@@ -458,13 +458,14 @@ fun ArcCompass(
         val tickAngleRange = 90f
         
         val normalizedHeading = (heading % 360f + 360f) % 360f
+        val roundedHeading = ceil(normalizedHeading.toDouble()).toFloat() % 360f
         
         // Fading boundaries: start fading near the edge, end fading well outside
         val fadeStart = size.width * 0.42f
         val fadeEnd = size.width * 0.75f
 
         for (deg in 0 until 360 step 1) {
-            var diff = deg - normalizedHeading
+            var diff = deg - roundedHeading
             while (diff > 180) diff -= 360
             while (diff < -180) diff += 360
             
