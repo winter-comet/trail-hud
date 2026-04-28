@@ -4,15 +4,15 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
@@ -27,6 +27,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
@@ -43,8 +44,94 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.app.ActivityCompat
+import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.bluetooth.BluetoothSocket
+import java.io.IOException
+import java.util.UUID
+import java.util.Timer
+import java.util.TimerTask
+import androidx.compose.foundation.border
 
 class MainActivity : ComponentActivity() {
+
+    private var bluetoothSocket: BluetoothSocket? = null
+    private val sppUuid: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+    private var broadcastTimer: Timer? = null
+
+    private var lastLocation: Location? = null
+    private var lastRotation: FloatArray? = null
+
+    private fun connectToDevice(device: BluetoothDevice) {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        Thread {
+            try {
+                bluetoothSocket?.close()
+                bluetoothSocket = device.createRfcommSocketToServiceRecord(sppUuid)
+                bluetoothSocket?.connect()
+                runOnUiThread { startBroadcasting() }
+            } catch (e: IOException) {
+                e.printStackTrace()
+            }
+        }.start()
+    }
+
+    private fun startBroadcasting() {
+        val sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+
+        val sensorListener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent?) {
+                if (event?.sensor?.type == Sensor.TYPE_ROTATION_VECTOR) {
+                    lastRotation = event.values
+                }
+            }
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+
+        val locationListener = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                lastLocation = location
+            }
+            override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+            override fun onProviderEnabled(provider: String) {}
+            override fun onProviderDisabled(provider: String) {}
+        }
+
+        sensorManager.registerListener(sensorListener, sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR), SensorManager.SENSOR_DELAY_UI)
+        
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 1f, locationListener)
+        }
+
+        broadcastTimer?.cancel()
+        broadcastTimer = Timer()
+        broadcastTimer?.scheduleAtFixedRate(object : TimerTask() {
+            override fun run() {
+                val locStr = lastLocation?.let { "LOC:${it.latitude},${it.longitude}" } ?: "LOC:unknown"
+                val rotStr = lastRotation?.let { "ROT:${it.joinToString(",")}" } ?: "ROT:unknown"
+                sendData("$locStr|$rotStr")
+            }
+        }, 0, 500) // 500ms interval
+    }
+
+    private fun sendData(data: String) {
+        Thread {
+            try {
+                bluetoothSocket?.outputStream?.write((data + "\n").toByteArray())
+            } catch (e: IOException) {
+                // Connection lost
+            }
+        }.start()
+    }
 
     // Bluetooth adapter initialization
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
@@ -56,6 +143,13 @@ class MainActivity : ComponentActivity() {
     private val enableBluetoothLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { /* Bluetooth enabled */ }
+
+    // Launcher for model file selection
+    private val pickModelLauncher = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        // Handle the selected file URI
+    }
 
     // Launcher for runtime permission requests
     private val requestPermissionLauncher = registerForActivityResult(
@@ -116,6 +210,12 @@ class MainActivity : ComponentActivity() {
                     },
                     getPairedDevices = {
                         getPairedDevices()
+                    },
+                    onConnect = { device ->
+                        connectToDevice(device)
+                    },
+                    onPickModel = {
+                        pickModelLauncher.launch("*/*") // Or a specific type like "application/octet-stream"
                     }
                 )
             }
@@ -127,22 +227,24 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(
     modifier: Modifier = Modifier,
     onRequestBluetooth: () -> Unit = {},
-    getPairedDevices: () -> List<BluetoothDevice> = { emptyList() }
+    getPairedDevices: () -> List<BluetoothDevice> = { emptyList() },
+    onConnect: (BluetoothDevice) -> Unit = {},
+    onPickModel: () -> Unit = {}
 ) {
 
     // Universal colors
-    val lightOlive = Color(0xFF90A481)
-    val darkOlive = Color(0xFF839474)
+    val lightOlive = Color(0xFF8FA380)
+    val darkOlive = Color(0xFF829373)
     val lightBlack = Color(0x60000000)
     val darkBlack = Color(0xFF000000)
 
     // Universal font settings
     val font = FontFamily.Monospace
     val titleTextSize = 32.dp
-    val bodyFontSize = 18.dp
 
     val iconRipplePadding = 6.dp // Universal padding for touch area
     val smallBorderRadius = 6.dp // Universal small border radius
+    val borderWidth = 2.dp
 
     var menuExpanded by remember { mutableStateOf(false) } // State for dropdown menu visibility
     var showDeviceDialog by remember { mutableStateOf(false) } // State for device selection dialog
@@ -192,94 +294,96 @@ fun MainScreen(
                         modifier = Modifier.size(titleTextSize),
                     )
                 }
-                // Dropdown menu
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                    modifier = Modifier.background(darkOlive)
-                ) {
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                "OPTION 1",
-                                fontFamily = font,
-                                color = darkBlack
-                            )
-                        },
-                        onClick = {
-                            /* TODO: Option 1 trigger */
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                "OPTION 2",
-                                fontFamily = font,
-                                color = darkBlack
-                            )
-                        },
-                        onClick = {
-                            /* TODO: Option 2 trigger */
-                        }
-                    )
-                }
             }
         }
 
-        // Spacer to push buttons to bottom
-        Spacer(modifier = Modifier.weight(1f))
-
-        // Button for establishing a Bluetooth connection
-        Button(
-            onClick = {
-                onRequestBluetooth()
-                pairedDevices = getPairedDevices()
-                showDeviceDialog = true
-            },
+        // Middle section with shape outlines
+        Column(
             modifier = Modifier
+                .weight(1f)
                 .fillMaxWidth()
-                .height(60.dp)
-                .padding(horizontal = 16.dp, vertical = 4.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = darkOlive,
-            ),
-            shape = RoundedCornerShape(smallBorderRadius),
+                .padding(horizontal = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            Text(
-                "CONNECT",
-                fontSize = (bodyFontSize.value).sp,
-                fontFamily = font,
-                letterSpacing = 1.sp,
-                color = darkBlack,
+            // Square outline
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .border(BorderStroke(borderWidth, darkBlack), RoundedCornerShape(smallBorderRadius))
+            )
+            Spacer(modifier = Modifier.height(32.dp))
+            // Rectangle outline
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(160.dp)
+                    .background(darkBlack, RoundedCornerShape(smallBorderRadius))
+                    .border(BorderStroke(borderWidth, darkBlack), RoundedCornerShape(smallBorderRadius))
             )
         }
 
-        // Button for importing a 3D model of the device to be displayed
-        Button(
-            onClick = { /* TODO: Handle button click */ },
+        // Row for circular buttons at the bottom
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(60.dp)
-                .padding(horizontal = 16.dp, vertical = 4.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = darkOlive,
-            ),
-            shape = RoundedCornerShape(smallBorderRadius), // Subtle rounding
+                .padding(horizontal = 32.dp, vertical = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                "IMPORT MODEL",
-                fontSize = (bodyFontSize.value).sp,
-                fontFamily = font,
-                letterSpacing = 1.sp,
-                color = darkBlack,
-            )
+            // Button for establishing a Bluetooth connection
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .border(BorderStroke(borderWidth, darkOlive), CircleShape)
+                    .clip(CircleShape)
+                    .clickable(
+                        onClick = {
+                            onRequestBluetooth()
+                            pairedDevices = getPairedDevices()
+                            showDeviceDialog = true
+                        },
+                        indication = ripple(bounded = true, color = lightBlack),
+                        interactionSource = remember { MutableInteractionSource() },
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.bluetooth),
+                    contentDescription = "Connect",
+                    tint = darkBlack,
+                    modifier = Modifier.size(32.dp)
+                )
+            }
+
+            // Button for importing a 3D model of the device to be displayed
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .border(BorderStroke(borderWidth, darkOlive), CircleShape)
+                    .clip(CircleShape)
+                    .clickable(
+                        onClick = { onPickModel() },
+                        indication = ripple(bounded = true, color = lightBlack),
+                        interactionSource = remember { MutableInteractionSource() },
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.cube),
+                    contentDescription = "Import Model",
+                    tint = darkBlack,
+                    modifier = Modifier.size(32.dp)
+                )
+            }
         }
 
         if (showDeviceDialog) {
             BluetoothDeviceDialog(
                 devices = pairedDevices,
                 onDeviceSelected = { device ->
-                    /* TODO: Code for establishing a connection */
+                    onConnect(device)
                     showDeviceDialog = false
                 },
                 onDismiss = { showDeviceDialog = false },
@@ -297,6 +401,14 @@ fun MainScreen(
     }
 }
 
+@Preview(showBackground = true)
+@Composable
+fun MainScreenPreview() {
+    TrailHUDTheme {
+        MainScreen()
+    }
+}
+
 @Composable
 fun BluetoothDeviceDialog(
     devices: List<BluetoothDevice>,
@@ -307,20 +419,56 @@ fun BluetoothDeviceDialog(
     darkOlive: Color
 ) {
     val context = LocalContext.current
+    val smallBorderRadius = 6.dp
+    val borderWidth = 2.dp
 
-    // Bluetooth pop-up
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(32.dp)
+            .border(BorderStroke(borderWidth, darkBlack), RoundedCornerShape(smallBorderRadius)),
+        shape = RoundedCornerShape(smallBorderRadius),
+        containerColor = darkOlive,
         title = {
-            Text("SELECT A DEVICE", fontFamily = font, color = darkBlack)
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "BT-DEVICES",
+                    fontFamily = font,
+                    fontSize = 20.sp,
+                    color = darkBlack,
+                    letterSpacing = 2.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.4f)
+                        .height(borderWidth)
+                        .background(darkBlack)
+                )
+            }
         },
         text = {
-            Column {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 if (devices.isEmpty()) {
-                    Text("No paired devices found", fontFamily = font, color = darkBlack)
+                    Text(
+                        "NO PAIRED DEVICES",
+                        fontFamily = font,
+                        color = darkBlack.copy(alpha = 0.6f),
+                        fontSize = 14.sp,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    )
                 } else {
                     devices.forEach { device ->
-                        // Check for Bluetooth connect permission on Android 12+
                         val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                             ActivityCompat.checkSelfPermission(
                                 context,
@@ -329,14 +477,23 @@ fun BluetoothDeviceDialog(
                         } else true
 
                         if (hasPermission) {
-                            TextButton(
-                                onClick = { onDeviceSelected(device) },
-                                modifier = Modifier.fillMaxWidth()
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(
+                                        BorderStroke(1.dp, darkBlack.copy(alpha = 0.2f)),
+                                        RoundedCornerShape(smallBorderRadius)
+                                    )
+                                    .clip(RoundedCornerShape(smallBorderRadius))
+                                    .clickable { onDeviceSelected(device) }
+                                    .padding(12.dp)
                             ) {
                                 Text(
-                                    device.name ?: "Unknown Device",
+                                    device.name?.uppercase() ?: "UNKNOWN",
                                     fontFamily = font,
-                                    color = darkBlack
+                                    color = darkBlack,
+                                    fontSize = 14.sp,
+                                    letterSpacing = 1.sp
                                 )
                             }
                         }
@@ -346,9 +503,13 @@ fun BluetoothDeviceDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", fontFamily = font, color = darkBlack)
+                Text(
+                    "CANCEL",
+                    fontFamily = font,
+                    color = darkBlack,
+                    letterSpacing = 1.sp
+                )
             }
-        },
-        containerColor = darkOlive
+        }
     )
 }
