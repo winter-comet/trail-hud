@@ -40,6 +40,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.painterResource
@@ -49,13 +51,20 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
+import androidx.core.content.getSystemService
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.lifecycleScope
 import com.trailhud.app.ui.theme.TrailHUDTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.io.IOException
-import java.util.*
+import java.util.UUID
 import kotlin.math.*
 
-// region --- UI Constants ---
+// --- UI constants ---
 val font = FontFamily.Monospace
 val titleTextSize = 32.dp
 val bodyTextSize = 24.dp
@@ -63,31 +72,28 @@ val iconRipplePadding = 6.dp
 val smallBorderRadius = 6.dp
 val borderWidth = 2.dp
 
-// Universal colors
+// --- Universal colors ---
 val lightOlive = Color(0xFF8FA380)
 val darkOlive = Color(0xFF829373)
 val lightBlack = Color(0x60000000)
 val darkBlack = Color(0xFF000000)
 val white = Color(0xFFFFFFFF)
-// endregion
 
 class MainActivity : ComponentActivity() {
 
-    // region --- Bluetooth & Sensors State ---
+    // --- Bluetooth & sensors state ---
     private val sppUuid: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
     private var bluetoothSocket: BluetoothSocket? = null
-    private var broadcastTimer: Timer? = null
+    private var broadcastJob: Job? = null
 
     private var lastLocation: Location? = null
     private var lastRotation: FloatArray? = null
 
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
-        val bluetoothManager = getSystemService(BluetoothManager::class.java)
-        bluetoothManager?.adapter
+        getSystemService<BluetoothManager>()?.adapter
     }
-    // endregion
 
-    // region --- Activity Launchers ---
+    // --- Activity launchers ---
     private val enableBluetoothLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { /* Bluetooth enabled */ }
@@ -95,7 +101,7 @@ class MainActivity : ComponentActivity() {
     private val pickModelLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
-        // Handle the selected file URI
+        // TODO: Handle the selected file URI
     }
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -105,7 +111,6 @@ class MainActivity : ComponentActivity() {
             enableBluetoothAndScan()
         }
     }
-    // endregion
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -125,26 +130,34 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // region --- Bluetooth & Data Logic ---
+    override fun onDestroy() {
+        super.onDestroy()
+        broadcastJob?.cancel()
+        bluetoothSocket?.close()
+    }
+
+    // --- Bluetooth & data logic ---
     private fun connectToDevice(device: BluetoothDevice) {
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            return
-        }
-        Thread {
+        if (ActivityCompat.checkSelfPermission(
+                this, Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) return
+
+        lifecycleScope.launch(Dispatchers.IO) {
             try {
                 bluetoothSocket?.close()
                 bluetoothSocket = device.createRfcommSocketToServiceRecord(sppUuid)
                 bluetoothSocket?.connect()
-                runOnUiThread { startBroadcasting() }
+                launch(Dispatchers.Main) { startBroadcasting() }
             } catch (e: IOException) {
                 e.printStackTrace()
             }
-        }.start()
+        }
     }
 
     private fun startBroadcasting() {
-        val sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val sensorManager = getSystemService<SensorManager>()
+        val locationManager = getSystemService<LocationManager>()
 
         val sensorListener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent?) {
@@ -159,49 +172,53 @@ class MainActivity : ComponentActivity() {
             override fun onLocationChanged(location: Location) {
                 lastLocation = location
             }
-            override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-            override fun onProviderEnabled(provider: String) {}
-            override fun onProviderDisabled(provider: String) {}
         }
 
-        sensorManager.registerListener(sensorListener, sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR), SensorManager.SENSOR_DELAY_UI)
-        
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 1f, locationListener)
+        sensorManager?.registerListener(
+            sensorListener,
+            sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR),
+            SensorManager.SENSOR_DELAY_UI
+        )
+
+        if (ActivityCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            locationManager?.requestLocationUpdates(
+                LocationManager.GPS_PROVIDER, 1000L, 1f, locationListener
+            )
         }
 
-        broadcastTimer?.cancel()
-        broadcastTimer = Timer()
-        broadcastTimer?.scheduleAtFixedRate(object : TimerTask() {
-            override fun run() {
+        broadcastJob?.cancel()
+        broadcastJob = lifecycleScope.launch(Dispatchers.IO) {
+            while (isActive) {
                 val locStr = lastLocation?.let { "LOC:${it.latitude},${it.longitude}" } ?: "LOC:unknown"
                 val rotStr = lastRotation?.let { "ROT:${it.joinToString(",")}" } ?: "ROT:unknown"
                 sendData("$locStr|$rotStr")
+                delay(500)
             }
-        }, 0, 500)
+        }
     }
 
     private fun sendData(data: String) {
-        Thread {
-            try {
-                bluetoothSocket?.outputStream?.write((data + "\n").toByteArray())
-            } catch (e: IOException) {
-                // Connection lost
-            }
-        }.start()
+        try {
+            bluetoothSocket?.outputStream?.write((data + "\n").toByteArray())
+        } catch (e: IOException) {
+            // TODO: Handle lost connection
+        }
     }
 
     private fun getPairedDevices(): List<BluetoothDevice> {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                return emptyList()
-            }
+            if (ActivityCompat.checkSelfPermission(
+                    this, Manifest.permission.BLUETOOTH_CONNECT
+                ) != PackageManager.PERMISSION_GRANTED
+            ) return emptyList()
         }
         return bluetoothAdapter?.bondedDevices?.toList() ?: emptyList()
     }
-    // endregion
 
-    // region --- Permissions Logic ---
+    // --- Permissions logic ---
     private fun enableBluetoothAndScan() {
         if (bluetoothAdapter?.isEnabled == false) {
             val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
@@ -224,11 +241,9 @@ class MainActivity : ComponentActivity() {
         }
         requestPermissionLauncher.launch(permissions)
     }
-    // endregion
 }
 
-// region --- Composables ---
-
+// --- Composables ---
 @Composable
 fun MainScreen(
     modifier: Modifier = Modifier,
@@ -237,7 +252,7 @@ fun MainScreen(
     onConnect: (BluetoothDevice) -> Unit = {},
     onPickModel: () -> Unit = {}
 ) {
-    // State
+    // --- App state ---
     var rawHeading by remember { mutableFloatStateOf(0f) }
     var menuExpanded by remember { mutableStateOf(false) }
     var showDeviceDialog by remember { mutableStateOf(false) }
@@ -255,10 +270,10 @@ fun MainScreen(
     val context = LocalContext.current
     val isPreview = LocalInspectionMode.current
 
-    // Sensors logic
+    // --- Sensors logic ---
     if (!isPreview) {
         DisposableEffect(Unit) {
-            val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+            val sensorManager = context.getSystemService<SensorManager>()
             val rotationSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
             var lastTarget = 0f
 
@@ -269,16 +284,16 @@ fun MainScreen(
                         SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
                         val orientationValues = FloatArray(3)
                         SensorManager.getOrientation(rotationMatrix, orientationValues)
-                        var azimuth = Math.toDegrees(orientationValues[0].toDouble()).toFloat()
+
+                        var azimuth = (orientationValues[0] * (180.0 / PI)).toFloat()
                         if (azimuth < 0) azimuth += 360f
-                        
+
                         var diff = azimuth - (lastTarget % 360f)
                         while (diff > 180f) diff -= 360f
                         while (diff < -180f) diff += 360f
-                        
-                        val newTarget = lastTarget + diff
-                        lastTarget = newTarget
-                        rawHeading = newTarget
+
+                        lastTarget += diff
+                        rawHeading = lastTarget
                     }
                 }
                 override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -289,13 +304,15 @@ fun MainScreen(
         }
     }
 
+    // --- GUI layout ---
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(lightOlive)
             .statusBarsPadding(),
     ) {
-        // Header
+
+        // --- Header ---
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -333,7 +350,7 @@ fun MainScreen(
             }
         }
 
-        // Main Content
+        // --- Body ---
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -342,7 +359,8 @@ fun MainScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // Compass
+
+            // Compass area
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -363,10 +381,10 @@ fun MainScreen(
                         .padding(bottom = 24.dp)
                 )
             }
-            
+
             Spacer(modifier = Modifier.height(32.dp))
-            
-            // Placeholder/Secondary View
+
+            // Placeholder view
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -376,7 +394,7 @@ fun MainScreen(
             )
         }
 
-        // Bottom Controls
+        // --- Controls ---
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -384,7 +402,8 @@ fun MainScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Bluetooth Button
+
+            // Bluetooth button
             Box(
                 modifier = Modifier
                     .size(64.dp)
@@ -409,7 +428,7 @@ fun MainScreen(
                 )
             }
 
-            // Model Import Button
+            // Model import button
             Box(
                 modifier = Modifier
                     .size(64.dp)
@@ -452,26 +471,27 @@ fun ArcCompass(
     modifier: Modifier = Modifier,
     color: Color = Color.Black
 ) {
+    // --- Compass arc ---
     Canvas(modifier = modifier.fillMaxSize()) {
         val arcCenter = Offset(size.width / 2, size.height * 2.8f)
         val radius = size.height * 2.2f
         val tickAngleRange = 90f
-        
+
         val normalizedHeading = (heading % 360f + 360f) % 360f
         val roundedHeading = ceil(normalizedHeading.toDouble()).toFloat() % 360f
-        
-        // Fading boundaries: start fading near the edge, end fading well outside
-        val fadeStart = size.width * 0.42f
+
+        // Fading boundaries
+        val fadeStart = size.width * 0.35f
         val fadeEnd = size.width * 0.75f
 
         for (deg in 0 until 360 step 1) {
             var diff = deg - roundedHeading
             while (diff > 180) diff -= 360
             while (diff < -180) diff += 360
-            
+
             if (abs(diff) < tickAngleRange / 2) {
                 val angleRad = (diff - 90) * PI / 180.0
-                
+
                 // Use the horizontal position of the tick to determine alpha
                 val tickMidRadius = radius + (size.height * 0.125f)
                 val xPos = arcCenter.x + tickMidRadius * cos(angleRad).toFloat()
@@ -482,13 +502,13 @@ fun ArcCompass(
                     distFromCenter >= fadeEnd -> 0f
                     else -> 1f - (distFromCenter - fadeStart) / (fadeEnd - fadeStart)
                 }
-                
+
                 if (alpha <= 0f) continue
 
                 val baseLength = size.height * 0.25f
                 val isMajorAxis = deg % 90 == 0
                 val isTenDegree = deg % 10 == 0
-                
+
                 val tickLength = when {
                     isMajorAxis -> baseLength
                     isTenDegree -> baseLength * 0.7f
@@ -500,7 +520,7 @@ fun ArcCompass(
                     isTenDegree -> 4.dp.toPx()
                     else -> 2.dp.toPx()
                 }
-                
+
                 val start = Offset(
                     arcCenter.x + radius * cos(angleRad).toFloat(),
                     arcCenter.y + radius * sin(angleRad).toFloat()
@@ -509,23 +529,32 @@ fun ArcCompass(
                     arcCenter.x + (radius + tickLength) * cos(angleRad).toFloat(),
                     arcCenter.y + (radius + tickLength) * sin(angleRad).toFloat()
                 )
-                
+
                 drawLine(
                     color = color.copy(alpha = alpha),
                     start = start,
                     end = end,
-                    strokeWidth = weight
+                    strokeWidth = weight,
+                    cap = StrokeCap.Round
                 )
             }
         }
-        
+
+        // Heading indicator
         val indicatorY = arcCenter.y - radius
-        drawLine(
-            color = color,
-            start = Offset(size.width / 2, indicatorY - 8.dp.toPx()),
-            end = Offset(size.width / 2, indicatorY + 28.dp.toPx()),
-            strokeWidth = 5.dp.toPx()
-        )
+        val edgeLength = 20.dp.toPx()
+        val tipY = indicatorY + 6.dp.toPx()
+
+        val trianglePath = Path().apply {
+            val tipX = size.width / 2
+            val triangleHeight = edgeLength * (sqrt(3.0) / 2.0).toFloat()
+
+            moveTo(tipX, tipY)
+            lineTo(tipX - edgeLength / 2, tipY + triangleHeight)
+            lineTo(tipX + edgeLength / 2, tipY + triangleHeight)
+            close()
+        }
+        drawPath(path = trianglePath, color = color)
     }
 }
 
@@ -538,6 +567,7 @@ fun BluetoothDeviceDialog(
     val context = LocalContext.current
     val menuTextSize = 12.dp
 
+    // Bluetooth devices select
     AlertDialog(
         onDismissRequest = onDismiss,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
