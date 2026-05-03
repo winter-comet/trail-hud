@@ -38,7 +38,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -67,8 +69,10 @@ import kotlin.math.*
 // --- UI constants ---
 val font = FontFamily.Monospace
 val titleTextSize = 32.dp
+val subtitleTextSize = 16.dp
 val bodyTextSize = 24.dp
 val iconRipplePadding = 6.dp
+val largeBorderRadius = 16.dp
 val smallBorderRadius = 6.dp
 val borderWidth = 2.dp
 
@@ -261,7 +265,7 @@ fun MainScreen(
     val heading by animateFloatAsState(
         targetValue = rawHeading,
         animationSpec = spring(
-            stiffness = Spring.StiffnessHigh,
+            stiffness = Spring.StiffnessLow,
             visibilityThreshold = 0.01f
         ),
         label = "heading"
@@ -360,14 +364,65 @@ fun MainScreen(
             verticalArrangement = Arrangement.Center
         ) {
 
-            // Compass area
+            // Compass area (Liquid Glass style)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1f)
-                    .border(BorderStroke(borderWidth, darkBlack), RoundedCornerShape(smallBorderRadius)),
+                    .shadow(
+                        elevation = 20.dp,
+                        shape = RoundedCornerShape(largeBorderRadius),
+                        clip = false,
+                        ambientColor = Color.Black.copy(alpha = 0.15f),
+                        spotColor = Color.Black.copy(alpha = 0.25f)
+                    )
+                    .background(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                lightOlive,
+                                lightOlive
+                            )
+                        ),
+                        shape = RoundedCornerShape(largeBorderRadius)
+                    )
+                    .border(
+                        width = 1.dp,
+                        brush = Brush.linearGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.4f),
+                                Color.White.copy(alpha = 0.1f),
+                                Color.Transparent
+                            ),
+                            start = Offset(0f, 0f),
+                            end = Offset(1000f, 1000f)
+                        ),
+                        shape = RoundedCornerShape(largeBorderRadius)
+                    ),
                 contentAlignment = Alignment.Center
             ) {
+                // Section Title & Icon
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(start = 16.dp, top = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.compass),
+                        contentDescription = null,
+                        tint = darkBlack,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Text(
+                        text = "COMPASS",
+                        fontSize = subtitleTextSize.value.sp,
+                        fontFamily = font,
+                        color = darkBlack,
+                        letterSpacing = 1.sp
+                    )
+                }
+
                 ArcCompass(heading = heading, color = darkBlack)
 
                 Text(
@@ -389,9 +444,32 @@ fun MainScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(160.dp)
-                    .background(darkBlack, RoundedCornerShape(smallBorderRadius))
-                    .border(BorderStroke(borderWidth, darkBlack), RoundedCornerShape(smallBorderRadius))
-            )
+                    .background(darkBlack, RoundedCornerShape(largeBorderRadius))
+                    .border(BorderStroke(borderWidth, darkBlack), RoundedCornerShape(largeBorderRadius))
+            ) {
+                // Section Title & Icon
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(start = 16.dp, top = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.cell_tower),
+                        contentDescription = null,
+                        tint = white,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Text(
+                        text = "CONNECTION",
+                        fontSize = subtitleTextSize.value.sp,
+                        fontFamily = font,
+                        color = white,
+                        letterSpacing = 1.sp
+                    )
+                }
+            }
         }
 
         // --- Controls ---
@@ -574,8 +652,8 @@ fun BluetoothDeviceDialog(
         modifier = Modifier
             .fillMaxWidth()
             .padding(32.dp)
-            .border(BorderStroke(borderWidth, darkBlack), RoundedCornerShape(smallBorderRadius)),
-        shape = RoundedCornerShape(smallBorderRadius),
+            .border(BorderStroke(borderWidth, darkBlack), RoundedCornerShape(largeBorderRadius)),
+        shape = RoundedCornerShape(largeBorderRadius),
         containerColor = darkOlive,
         title = {
             Column(
