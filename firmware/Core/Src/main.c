@@ -142,7 +142,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define DEBUG_PRINT_SIZE 220U
+#define BLE_RX_LINE_SIZE 220U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -163,7 +164,7 @@ const osThreadAttr_t defaultTask_attributes = {
     .priority = (osPriority_t)osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
-
+static char debug_print[DEBUG_PRINT_SIZE];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -450,6 +451,96 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+static void PrintDebugTitle(void)
+{
+    static const char boot[] =
+        "\r\n"
+        "+===========================================================+\r\n"
+        "| TRAIL-HUD STM32 DEBUG TERMINAL                            |\r\n"
+        "+===========================================================+\r\n"
+        "| Board : STM32H750B-DK                                     |\r\n"
+        "| BLE   : HM-10 / AT-09 on USART1                           |\r\n"
+        "| Debug : USART3 / ST-LINK VCP / PuTTY / 9600 8N1           |\r\n"
+        "+-----------------------------------------------------------+\r\n"
+        "| Status: firmware started, waiting for BLE activity        |\r\n"
+        "+===========================================================+\r\n"
+        "\r\n";
+
+    HAL_UART_Transmit(&huart3,
+                      (uint8_t*)boot,
+                      sizeof(boot) - 1U,
+                      2000U);
+}
+
+static void PrintDebugLine(const char* text)
+{
+    int len;
+
+    len = snprintf(debug_print,
+                   sizeof(debug_print),
+                   "> %s\r\n",
+                   (text != NULL) ? text : "(null)");
+
+    if (len <= 0) return;
+    if (len >= sizeof(debug_print)) len = sizeof(debug_print) - 1;
+
+    HAL_UART_Transmit(&huart3,
+                      (uint8_t*)debug_print,
+                      (uint16_t)len,
+                      1000U);
+}
+
+static void PrintBlePacketDebug(const char* packet)
+{
+    int len;
+
+    if (packet == NULL) return;
+
+    if ((packet[0] == '[') && (packet[strlen(packet) - 1U] == ']')) { PrintDebugLine("BLE <- PHONE: phone pose packet received"); }
+    else { PrintDebugLine("BLE <- PHONE: unrecognized line received"); }
+
+    len = snprintf(debug_print,
+                   sizeof(debug_print),
+                   "  %s\r\n",
+                   packet);
+
+    if (len <= 0) return;
+    if (len >= (int)sizeof(debug_print)) len = (int)sizeof(debug_print) - 1;
+
+    HAL_UART_Transmit(&huart3,
+                      (uint8_t*)debug_print,
+                      (uint16_t)len,
+                      1000U);
+}
+
+static void HandleBleRxByte(uint8_t rx_byte, char* rx_line, uint16_t* rx_len, uint16_t rx_line_size)
+{
+    if ((rx_line == NULL) || (rx_len == NULL) || (rx_line_size == 0U)) return;
+    if (rx_byte == '\r') return;
+
+    if (rx_byte == '\n')
+    {
+        rx_line[*rx_len] = '\0';
+
+        if (*rx_len > 0U) PrintBlePacketDebug(rx_line);
+
+        *rx_len = 0U;
+        rx_line[0] = '\0';
+        return;
+    }
+
+    if (*rx_len < (uint16_t)(rx_line_size - 1U))
+    {
+        rx_line[*rx_len] = (char)rx_byte;
+        (*rx_len)++;
+    }
+    else
+    {
+        *rx_len = 0U;
+        rx_line[0] = '\0';
+        PrintDebugLine("BLE <- PHONE: RX line overflow, dropped partial packet");
+    }
+}
 
 /* USER CODE END 4 */
 
@@ -464,13 +555,21 @@ void StartDebugTask(void* argument)
 {
     /* USER CODE BEGIN 5 */
 
-    uint8_t rx_byte = 0U;
     uint32_t last_tick = 0U;
     uint32_t counter = 0U;
-    GPIO_PinState last_state = GPIO_PIN_RESET;
+    uint8_t rx_byte = 0U;
+    char ble_rx_line[BLE_RX_LINE_SIZE] = {0};
+    uint16_t ble_rx_len = 0U;
+    GPIO_PinState last_state;
 
-    const char* boot = "\r\nSTM32 BLE test: HM-10 on USART1, debug on USART3\r\n";
-    HAL_UART_Transmit(&huart3, (uint8_t*)boot, strlen(boot), 500U);
+    (void)argument;
+
+    PrintDebugTitle();
+
+    last_state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
+    PrintDebugLine((last_state == GPIO_PIN_SET)
+                       ? "HM10 STATE: CONNECTED"
+                       : "HM10 STATE: DISCONNECTED");
 
     for (;;)
     {
@@ -480,67 +579,38 @@ void StartDebugTask(void* argument)
         {
             last_state = state;
 
-            if (state == GPIO_PIN_SET)
-            {
-                const char* s = "\r\nHM10 STATE: CONNECTED\r\n";
-                HAL_UART_Transmit(&huart3, (uint8_t*)s, strlen(s), 500U);
-            }
-            else
-            {
-                const char* s = "\r\nHM10 STATE: DISCONNECTED\r\n";
-                HAL_UART_Transmit(&huart3, (uint8_t*)s, strlen(s), 500U);
-            }
+            PrintDebugLine((state == GPIO_PIN_SET)
+                               ? "HM10 STATE: CONNECTED"
+                               : "HM10 STATE: DISCONNECTED");
         }
 
-        /*
-         * Send heartbeat to the phone through HM-10 / USART1.
-         * Also mirror a short debug line to PuTTY through USART3.
-         */
-        if (state == GPIO_PIN_SET && (HAL_GetTick() - last_tick) >= 1000U)
+        if ((state == GPIO_PIN_SET) && ((HAL_GetTick() - last_tick) >= 1000U))
         {
             char ble_msg[48];
-            int ble_len = snprintf(ble_msg, sizeof(ble_msg),
+            int ble_len = snprintf(ble_msg,
+                                   sizeof(ble_msg),
                                    "stm32 heartbeat %lu\r\n",
-                                   counter++);
+                                   (unsigned long)counter++);
 
-            if (ble_len > 0)
+            if ((ble_len > 0) && (ble_len < (int)sizeof(ble_msg)))
             {
-                HAL_UART_Transmit(&huart1,
-                                  (uint8_t*)ble_msg,
-                                  (uint16_t)ble_len,
-                                  500U);
+                (void)HAL_UART_Transmit(&huart1,
+                                        (uint8_t*)ble_msg,
+                                        (uint16_t)ble_len,
+                                        500U);
 
-                const char* dbg = "USART1 -> HM10: heartbeat sent\r\n";
-                HAL_UART_Transmit(&huart3,
-                                  (uint8_t*)dbg,
-                                  strlen(dbg),
-                                  500U);
+                PrintDebugLine("USART1 -> HM10: heartbeat sent");
             }
 
             last_tick = HAL_GetTick();
         }
 
-        /*
-         * Echo bytes received from the phone:
-         * phone -> HM-10 -> USART1_RX -> STM32 -> USART1_TX -> HM-10 -> phone
-         */
-        if (HAL_UART_Receive(&huart1, &rx_byte, 1U, 20U) == HAL_OK)
+        while (HAL_UART_Receive(&huart1, &rx_byte, 1U, 1U) == HAL_OK)
         {
-            HAL_UART_Transmit(&huart1, &rx_byte, 1U, 100U);
-
-            char dbg[40];
-            int dbg_len = snprintf(dbg, sizeof(dbg),
-                                   "USART1 RX byte: 0x%02X '%c'\r\n",
-                                   rx_byte,
-                                   (rx_byte >= 32U && rx_byte <= 126U) ? rx_byte : '.');
-
-            if (dbg_len > 0)
-            {
-                HAL_UART_Transmit(&huart3,
-                                  (uint8_t*)dbg,
-                                  (uint16_t)dbg_len,
-                                  100U);
-            }
+            HandleBleRxByte(rx_byte,
+                            ble_rx_line,
+                            &ble_rx_len,
+                            sizeof(ble_rx_line));
         }
 
         osDelay(1);

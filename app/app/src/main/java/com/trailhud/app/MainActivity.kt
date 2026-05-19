@@ -4,7 +4,9 @@ import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
-import android.bluetooth.BluetoothSocket
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -17,6 +19,7 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -56,14 +59,16 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.getSystemService
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
+import com.trailhud.app.ble.Hm10BleClient
+import com.trailhud.app.protocol.PhoneLocationPayload
+import com.trailhud.app.protocol.PhoneRotationPayload
+import com.trailhud.app.protocol.TrailHudPacket
 import com.trailhud.app.ui.theme.TrailHUDTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.io.IOException
-import java.util.UUID
 import kotlin.math.*
 
 // --- UI constants ---
@@ -86,15 +91,33 @@ val white = Color(0xFFFFFFFF)
 class MainActivity : ComponentActivity() {
 
     // --- Bluetooth & sensors state ---
-    private val sppUuid: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-    private var bluetoothSocket: BluetoothSocket? = null
+    private var hm10Client: Hm10BleClient? = null
     private var broadcastJob: Job? = null
+    private var scanJob: Job? = null
+    private var sensorListener: SensorEventListener? = null
+    private var locationListener: LocationListener? = null
 
+    private val discoveredDevices = linkedMapOf<String, BluetoothDevice>()
     private var lastLocation: Location? = null
-    private var lastRotation: FloatArray? = null
+    private var lastRotationQuaternion: FloatArray? = null
+    private var lastLinkRssiDbm: Int? = null
+    private var updateRateSeconds: Long = TrailHudPacket.DEFAULT_UPDATE_RATE_SECONDS
+
+    private val updateRateMs: Long
+        get() = updateRateSeconds.coerceAtLeast(1L) * 1000L
 
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
         getSystemService<BluetoothManager>()?.adapter
+    }
+
+    private val scanCallback = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            discoveredDevices[result.device.address] = result.device
+        }
+
+        override fun onBatchScanResults(results: MutableList<ScanResult>) {
+            results.forEach { discoveredDevices[it.device.address] = it.device }
+        }
     }
 
     // --- Activity launchers ---
@@ -136,90 +159,162 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        broadcastJob?.cancel()
-        bluetoothSocket?.close()
+        stopBleScan()
+        stopBroadcasting()
+        hm10Client?.close()
     }
 
     // --- Bluetooth & data logic ---
     private fun connectToDevice(device: BluetoothDevice) {
-        if (ActivityCompat.checkSelfPermission(
-                this, Manifest.permission.BLUETOOTH_CONNECT
-            ) != PackageManager.PERMISSION_GRANTED
-        ) return
+        if (!hasBluetoothConnectPermission()) return
 
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                bluetoothSocket?.close()
-                bluetoothSocket = device.createRfcommSocketToServiceRecord(sppUuid)
-                bluetoothSocket?.connect()
-                launch(Dispatchers.Main) { startBroadcasting() }
-            } catch (e: IOException) {
-                e.printStackTrace()
-            }
-        }
+        hm10Client = Hm10BleClient(
+            context = this,
+            onReady = {
+                lifecycleScope.launch(Dispatchers.Main) { startBroadcasting() }
+            },
+            onDisconnected = {
+                lifecycleScope.launch(Dispatchers.Main) { stopBroadcasting() }
+            },
+            onRssiRead = { rssi ->
+                lastLinkRssiDbm = rssi
+                Log.d("TrailHUD", "BLE RSSI: $rssi dBm")
+            },
+            onError = { error -> Log.e("TrailHUD", error) }
+        )
+
+        hm10Client?.connect(device)
     }
 
     private fun startBroadcasting() {
+        stopBroadcasting()
+
         val sensorManager = getSystemService<SensorManager>()
         val locationManager = getSystemService<LocationManager>()
 
-        val sensorListener = object : SensorEventListener {
+        sensorListener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent?) {
                 if (event?.sensor?.type == Sensor.TYPE_ROTATION_VECTOR) {
-                    lastRotation = event.values
+                    val quaternion = FloatArray(4)
+                    SensorManager.getQuaternionFromVector(quaternion, event.values)
+                    lastRotationQuaternion = quaternion
                 }
             }
+
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         }
 
-        val locationListener = object : LocationListener {
+        locationListener = object : LocationListener {
             override fun onLocationChanged(location: Location) {
                 lastLocation = location
             }
         }
 
-        sensorManager?.registerListener(
-            sensorListener,
-            sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR),
-            SensorManager.SENSOR_DELAY_UI
-        )
-
-        if (ActivityCompat.checkSelfPermission(
-                this, Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            locationManager?.requestLocationUpdates(
-                LocationManager.GPS_PROVIDER, 1000L, 1f, locationListener
+        sensorListener?.let { listener ->
+            sensorManager?.registerListener(
+                listener,
+                sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR),
+                SensorManager.SENSOR_DELAY_UI
             )
         }
 
-        broadcastJob?.cancel()
+        if (hasLocationPermission()) {
+            lastLocation = locationManager?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: locationManager?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+
+            locationListener?.let { listener ->
+                locationManager?.requestLocationUpdates(
+                    LocationManager.GPS_PROVIDER,
+                    updateRateMs,
+                    1f,
+                    listener
+                )
+            }
+        }
+
         broadcastJob = lifecycleScope.launch(Dispatchers.IO) {
             while (isActive) {
-                val locStr = lastLocation?.let { "LOC:${it.latitude},${it.longitude}" } ?: "LOC:unknown"
-                val rotStr = lastRotation?.let { "ROT:${it.joinToString(",")}" } ?: "ROT:unknown"
-                sendData("$locStr|$rotStr")
-                delay(500)
+                val locationPayload = lastLocation?.let { location ->
+                    PhoneLocationPayload(
+                        latitude = location.latitude,
+                        longitude = location.longitude,
+                        altitudeMeters = if (location.hasAltitude()) location.altitude else null,
+                        horizontalAccuracyMeters = if (location.hasAccuracy()) location.accuracy else null
+                    )
+                }
+
+                val rotationPayload = lastRotationQuaternion?.let { q ->
+                    PhoneRotationPayload(
+                        qw = q[0],
+                        qx = q[1],
+                        qy = q[2],
+                        qz = q[3]
+                    )
+                }
+
+                val packet = TrailHudPacket.encodePhonePose(
+                    location = locationPayload,
+                    rotation = rotationPayload
+                )
+
+                hm10Client?.writeLine(packet)
+
+                /*
+                 * The phone can read BLE signal strength directly from the
+                 * active GATT connection, so the STM32 does not need to send
+                 * an RSSI packet back to the phone.
+                 */
+                hm10Client?.readRemoteRssi()
+
+                delay(updateRateMs)
             }
         }
     }
 
-    private fun sendData(data: String) {
-        try {
-            bluetoothSocket?.outputStream?.write((data + "\n").toByteArray())
-        } catch (e: IOException) {
-            // TODO: Handle lost connection
+    private fun stopBroadcasting() {
+        broadcastJob?.cancel()
+        broadcastJob = null
+
+        getSystemService<SensorManager>()?.let { manager ->
+            sensorListener?.let { manager.unregisterListener(it) }
         }
+        sensorListener = null
+
+        getSystemService<LocationManager>()?.let { manager ->
+            locationListener?.let { manager.removeUpdates(it) }
+        }
+        locationListener = null
     }
 
     private fun getPairedDevices(): List<BluetoothDevice> {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ActivityCompat.checkSelfPermission(
-                    this, Manifest.permission.BLUETOOTH_CONNECT
-                ) != PackageManager.PERMISSION_GRANTED
-            ) return emptyList()
+        return discoveredDevices.values.distinctBy { it.address }
+    }
+
+    private fun startBleScan() {
+        if (!hasBluetoothScanPermission()) return
+        if (bluetoothAdapter?.isEnabled != true) return
+
+        discoveredDevices.clear()
+
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+
+        bluetoothAdapter?.bluetoothLeScanner?.startScan(null, settings, scanCallback)
+
+        scanJob?.cancel()
+        scanJob = lifecycleScope.launch(Dispatchers.Main) {
+            delay(4000L)
+            stopBleScan()
         }
-        return bluetoothAdapter?.bondedDevices?.toList() ?: emptyList()
+    }
+
+    private fun stopBleScan() {
+        if (hasBluetoothScanPermission()) {
+            bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
+        }
+        scanJob?.cancel()
+        scanJob = null
     }
 
     // --- Permissions logic ---
@@ -227,6 +322,8 @@ class MainActivity : ComponentActivity() {
         if (bluetoothAdapter?.isEnabled == false) {
             val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
             enableBluetoothLauncher.launch(enableBtIntent)
+        } else {
+            startBleScan()
         }
     }
 
@@ -234,16 +331,54 @@ class MainActivity : ComponentActivity() {
         val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
             )
         } else {
             arrayOf(
                 Manifest.permission.BLUETOOTH,
                 Manifest.permission.BLUETOOTH_ADMIN,
-                Manifest.permission.ACCESS_FINE_LOCATION
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
             )
         }
-        requestPermissionLauncher.launch(permissions)
+
+        val missing = permissions.filter {
+            ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+
+        if (missing.isEmpty()) {
+            enableBluetoothAndScan()
+        } else {
+            requestPermissionLauncher.launch(permissions)
+        }
+    }
+
+    private fun hasBluetoothConnectPermission(): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun hasBluetoothScanPermission(): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_SCAN
+            ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun hasLocationPermission(): Boolean {
+        return ActivityCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED || ActivityCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
     }
 }
 
@@ -273,6 +408,7 @@ fun MainScreen(
 
     val context = LocalContext.current
     val isPreview = LocalInspectionMode.current
+    val scope = rememberCoroutineScope()
 
     // --- Sensors logic ---
     if (!isPreview) {
@@ -492,6 +628,10 @@ fun MainScreen(
                             onRequestBluetooth()
                             pairedDevices = getPairedDevices()
                             showDeviceDialog = true
+                            scope.launch {
+                                delay(2500L)
+                                pairedDevices = getPairedDevices()
+                            }
                         },
                         indication = ripple(bounded = true, color = lightBlack),
                         interactionSource = remember { MutableInteractionSource() },
@@ -559,8 +699,8 @@ fun ArcCompass(
         val roundedHeading = ceil(normalizedHeading.toDouble()).toFloat() % 360f
 
         // Fading boundaries
-        val fadeStart = size.width * 0.35f
-        val fadeEnd = size.width * 0.75f
+        val fadeStart = size.width * 0.30f
+        val fadeEnd = size.width * 0.45f
 
         for (deg in 0 until 360 step 1) {
             var diff = deg - roundedHeading
@@ -661,7 +801,7 @@ fun BluetoothDeviceDialog(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    "BT-DEVICES",
+                    "BLE-DEVICES",
                     fontFamily = font,
                     fontSize = (bodyTextSize.value).sp,
                     color = darkBlack,
@@ -685,7 +825,7 @@ fun BluetoothDeviceDialog(
             ) {
                 if (devices.isEmpty()) {
                     Text(
-                        "NO PAIRED DEVICES",
+                        "NO BLE DEVICES",
                         fontFamily = font,
                         color = darkBlack.copy(alpha = 0.6f),
                         fontSize = (menuTextSize.value).sp,
