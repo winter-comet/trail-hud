@@ -137,6 +137,11 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef enum
+{
+    DEBUG_MODE_PINGS = 0,
+    DEBUG_MODE_PHONE_DATA
+} DebugTerminalMode;
 
 /* USER CODE END PTD */
 
@@ -462,16 +467,21 @@ static void PrintDebugTitle(void)
         "| BLE   : HM-10 / AT-09 on USART1                           |\r\n"
         "| Debug : USART3 / ST-LINK VCP / PuTTY / 9600 8N1           |\r\n"
         "+-----------------------------------------------------------+\r\n"
-        "| Status: firmware started, waiting for BLE activity        |\r\n"
+        "| Default mode : PINGS                                      |\r\n"
+        "| Press 'm'    : switch between PINGS and PHONE DATA        |\r\n"
+        "+-----------------------------------------------------------+\r\n"
+        "| PINGS      : show STM32 -> HM-10 ping activity            |\r\n"
+        "| PHONE DATA : show complete lines received from the phone  |\r\n"
         "+===========================================================+\r\n"
         "\r\n";
 
     HAL_UART_Transmit(&huart3,
                       (uint8_t*)boot,
-                      sizeof(boot) - 1U,
+                      (uint16_t)(sizeof(boot) - 1U),
                       2000U);
 }
 
+static const char* DebugModeName(DebugTerminalMode mode) { return (mode == DEBUG_MODE_PHONE_DATA) ? "PHONE DATA" : "PINGS"; }
 static void PrintDebugLine(const char* text)
 {
     int len;
@@ -489,15 +499,41 @@ static void PrintDebugLine(const char* text)
                       (uint16_t)len,
                       1000U);
 }
-
-static void PrintBlePacketDebug(const char* packet)
+static void PrintDebugMode(DebugTerminalMode mode)
 {
     int len;
 
+    len = snprintf(debug_print,
+                   sizeof(debug_print),
+                   "> DEBUG MODE: %s\r\n",
+                   DebugModeName(mode));
+
+    if (len <= 0) return;
+    if (len >= (int)sizeof(debug_print)) len = (int)sizeof(debug_print) - 1;
+
+    HAL_UART_Transmit(&huart3,
+                      (uint8_t*)debug_print,
+                      (uint16_t)len,
+                      1000U);
+}
+static void PrintBlePacketDebug(const char* packet)
+{
+    int len;
+    size_t packet_len;
+
     if (packet == NULL) return;
 
-    if ((packet[0] == '[') && (packet[strlen(packet) - 1U] == ']')) { PrintDebugLine("BLE <- PHONE: phone pose packet received"); }
-    else { PrintDebugLine("BLE <- PHONE: unrecognized line received"); }
+    packet_len = strlen(packet);
+    if (packet_len == 0U) return;
+
+    if ((packet[0] == '[') && (packet[packet_len - 1U] == ']'))
+    {
+        PrintDebugLine("BLE <- PHONE: phone pose packet received");
+    }
+    else
+    {
+        PrintDebugLine("BLE <- PHONE: unrecognized line received");
+    }
 
     len = snprintf(debug_print,
                    sizeof(debug_print),
@@ -512,8 +548,25 @@ static void PrintBlePacketDebug(const char* packet)
                       (uint16_t)len,
                       1000U);
 }
+static void HandleDebugTerminalInput(DebugTerminalMode* mode)
+{
+    uint8_t rx_byte = 0U;
 
-static void HandleBleRxByte(uint8_t rx_byte, char* rx_line, uint16_t* rx_len, uint16_t rx_line_size)
+    if (mode == NULL) return;
+
+    while (HAL_UART_Receive(&huart3, &rx_byte, 1U, 0U) == HAL_OK)
+    {
+        if ((rx_byte == 'm') || (rx_byte == 'M'))
+        {
+            *mode = (*mode == DEBUG_MODE_PINGS)
+                        ? DEBUG_MODE_PHONE_DATA
+                        : DEBUG_MODE_PINGS;
+
+            PrintDebugMode(*mode);
+        }
+    }
+}
+static void HandleBleRxByte(uint8_t rx_byte, char* rx_line, uint16_t* rx_len, uint16_t rx_line_size, DebugTerminalMode mode)
 {
     if ((rx_line == NULL) || (rx_len == NULL) || (rx_line_size == 0U)) return;
     if (rx_byte == '\r') return;
@@ -522,7 +575,10 @@ static void HandleBleRxByte(uint8_t rx_byte, char* rx_line, uint16_t* rx_len, ui
     {
         rx_line[*rx_len] = '\0';
 
-        if (*rx_len > 0U) PrintBlePacketDebug(rx_line);
+        if ((*rx_len > 0U) && (mode == DEBUG_MODE_PHONE_DATA))
+        {
+            PrintBlePacketDebug(rx_line);
+        }
 
         *rx_len = 0U;
         rx_line[0] = '\0';
@@ -538,7 +594,11 @@ static void HandleBleRxByte(uint8_t rx_byte, char* rx_line, uint16_t* rx_len, ui
     {
         *rx_len = 0U;
         rx_line[0] = '\0';
-        PrintDebugLine("BLE <- PHONE: RX line overflow, dropped partial packet");
+
+        if (mode == DEBUG_MODE_PHONE_DATA)
+        {
+            PrintDebugLine("BLE <- PHONE: RX line overflow, dropped partial packet");
+        }
     }
 }
 
@@ -556,15 +616,16 @@ void StartDebugTask(void* argument)
     /* USER CODE BEGIN 5 */
 
     uint32_t last_tick = 0U;
-    uint32_t counter = 0U;
     uint8_t rx_byte = 0U;
     char ble_rx_line[BLE_RX_LINE_SIZE] = {0};
     uint16_t ble_rx_len = 0U;
     GPIO_PinState last_state;
+    DebugTerminalMode debug_mode = DEBUG_MODE_PINGS;
 
     (void)argument;
 
     PrintDebugTitle();
+    PrintDebugMode(debug_mode);
 
     last_state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
     PrintDebugLine((last_state == GPIO_PIN_SET)
@@ -573,7 +634,9 @@ void StartDebugTask(void* argument)
 
     for (;;)
     {
-        GPIO_PinState state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
+        GPIO_PinState state;
+        state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
+        HandleDebugTerminalInput(&debug_mode);
 
         if (state != last_state)
         {
@@ -584,13 +647,14 @@ void StartDebugTask(void* argument)
                                : "HM10 STATE: DISCONNECTED");
         }
 
-        if ((state == GPIO_PIN_SET) && ((HAL_GetTick() - last_tick) >= 1000U))
+        if ((debug_mode == DEBUG_MODE_PINGS) &&
+            (state == GPIO_PIN_SET) &&
+            ((HAL_GetTick() - last_tick) >= 1000U))
         {
             char ble_msg[48];
             int ble_len = snprintf(ble_msg,
                                    sizeof(ble_msg),
-                                   "stm32 heartbeat %lu\r\n",
-                                   (unsigned long)counter++);
+                                   "stm32 ping received\r\n");
 
             if ((ble_len > 0) && (ble_len < (int)sizeof(ble_msg)))
             {
@@ -599,9 +663,25 @@ void StartDebugTask(void* argument)
                                         (uint16_t)ble_len,
                                         500U);
 
-                PrintDebugLine("USART1 -> HM10: heartbeat sent");
+                int dbg_len = snprintf(debug_print,
+                                       sizeof(debug_print),
+                                       "> USART1 -> HM10: stm32 ping sent\r\n");
+
+                if (dbg_len > 0)
+                {
+                    if (dbg_len >= (int)sizeof(debug_print)) dbg_len = (int)sizeof(debug_print) - 1;
+
+                    HAL_UART_Transmit(&huart3,
+                                      (uint8_t*)debug_print,
+                                      (uint16_t)dbg_len,
+                                      1000U);
+                }
             }
 
+            last_tick = HAL_GetTick();
+        }
+        else if (debug_mode != DEBUG_MODE_PINGS)
+        {
             last_tick = HAL_GetTick();
         }
 
@@ -610,7 +690,8 @@ void StartDebugTask(void* argument)
             HandleBleRxByte(rx_byte,
                             ble_rx_line,
                             &ble_rx_len,
-                            sizeof(ble_rx_line));
+                            sizeof(ble_rx_line),
+                            debug_mode);
         }
 
         osDelay(1);

@@ -70,6 +70,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.*
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.text.style.TextOverflow
 
 // --- UI constants ---
 val font = FontFamily.Monospace
@@ -92,6 +95,7 @@ class MainActivity : ComponentActivity() {
 
     // --- Bluetooth & sensors state ---
     private var hm10Client: Hm10BleClient? = null
+    private var isBleConnected by mutableStateOf(false)
     private var broadcastJob: Job? = null
     private var scanJob: Job? = null
     private var sensorListener: SensorEventListener? = null
@@ -139,6 +143,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun handleBluetoothButtonPress(): Boolean {
+        if (isBleConnected) {
+            disconnectFromDevice()
+            return false
+        }
+
+        requestBluetoothPermissions()
+        return true
+    }
+
+    private fun disconnectFromDevice() {
+        stopBleScan()
+        stopBroadcasting()
+        lastLinkRssiDbm = null
+        isBleConnected = false
+        hm10Client?.close()
+        hm10Client = null
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -148,7 +171,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             TrailHUDTheme {
                 MainScreen(
-                    onRequestBluetooth = { requestBluetoothPermissions() },
+                    isBleConnected = isBleConnected,
+                    onRequestBluetooth = { handleBluetoothButtonPress() },
                     getPairedDevices = { getPairedDevices() },
                     onConnect = { device -> connectToDevice(device) },
                     onPickModel = { pickModelLauncher.launch("*/*") }
@@ -159,28 +183,40 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        stopBleScan()
-        stopBroadcasting()
-        hm10Client?.close()
+        disconnectFromDevice()
     }
 
     // --- Bluetooth & data logic ---
     private fun connectToDevice(device: BluetoothDevice) {
         if (!hasBluetoothConnectPermission()) return
 
+        disconnectFromDevice()
+
         hm10Client = Hm10BleClient(
             context = this,
             onReady = {
-                lifecycleScope.launch(Dispatchers.Main) { startBroadcasting() }
+                lifecycleScope.launch(Dispatchers.Main) {
+                    isBleConnected = true
+                    startBroadcasting()
+                }
             },
             onDisconnected = {
-                lifecycleScope.launch(Dispatchers.Main) { stopBroadcasting() }
+                lifecycleScope.launch(Dispatchers.Main) {
+                    isBleConnected = false
+                    stopBroadcasting()
+                }
             },
             onRssiRead = { rssi ->
                 lastLinkRssiDbm = rssi
                 Log.d("TrailHUD", "BLE RSSI: $rssi dBm")
             },
-            onError = { error -> Log.e("TrailHUD", error) }
+            onError = { error ->
+                Log.e("TrailHUD", error)
+                lifecycleScope.launch(Dispatchers.Main) {
+                    isBleConnected = false
+                    stopBroadcasting()
+                }
+            }
         )
 
         hm10Client?.connect(device)
@@ -386,7 +422,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen(
     modifier: Modifier = Modifier,
-    onRequestBluetooth: () -> Unit = {},
+    isBleConnected: Boolean = false,
+    onRequestBluetooth: () -> Boolean = { true },
     getPairedDevices: () -> List<BluetoothDevice> = { emptyList() },
     onConnect: (BluetoothDevice) -> Unit = {},
     onPickModel: () -> Unit = {}
@@ -609,62 +646,116 @@ fun MainScreen(
         }
 
         // --- Controls ---
-        Row(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 32.dp, vertical = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 32.dp, vertical = 16.dp)
         ) {
+            val controlButtonSize = 64.dp
+            val controlButtonGap = 16.dp
+            val expandedBluetoothWidth = maxWidth - controlButtonSize - controlButtonGap
 
-            // Bluetooth button
+            val bluetoothButtonWidth by animateDpAsState(
+                targetValue = if (isBleConnected) expandedBluetoothWidth else controlButtonSize,
+                animationSpec = spring(
+                    stiffness = Spring.StiffnessMediumLow,
+                    dampingRatio = Spring.DampingRatioNoBouncy
+                ),
+                label = "bluetoothButtonWidth"
+            )
+
+            val disconnectTextAlpha by animateFloatAsState(
+                targetValue = if (isBleConnected) 1f else 0f,
+                animationSpec = spring(
+                    stiffness = Spring.StiffnessMediumLow,
+                    dampingRatio = Spring.DampingRatioNoBouncy
+                ),
+                label = "disconnectTextAlpha"
+            )
+
             Box(
                 modifier = Modifier
-                    .size(64.dp)
-                    .border(BorderStroke(borderWidth, darkOlive), CircleShape)
-                    .clip(CircleShape)
-                    .clickable(
-                        onClick = {
-                            onRequestBluetooth()
-                            pairedDevices = getPairedDevices()
-                            showDeviceDialog = true
-                            scope.launch {
-                                delay(2500L)
-                                pairedDevices = getPairedDevices()
-                            }
-                        },
-                        indication = ripple(bounded = true, color = lightBlack),
-                        interactionSource = remember { MutableInteractionSource() },
-                    ),
-                contentAlignment = Alignment.Center,
+                    .fillMaxWidth()
+                    .height(controlButtonSize)
             ) {
-                Icon(
-                    painter = painterResource(id = R.drawable.bluetooth),
-                    contentDescription = "Connect",
-                    tint = darkBlack,
-                    modifier = Modifier.size(32.dp)
-                )
-            }
 
-            // Model import button
-            Box(
-                modifier = Modifier
-                    .size(64.dp)
-                    .border(BorderStroke(borderWidth, darkOlive), CircleShape)
-                    .clip(CircleShape)
-                    .clickable(
-                        onClick = { onPickModel() },
-                        indication = ripple(bounded = true, color = lightBlack),
-                        interactionSource = remember { MutableInteractionSource() },
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    painter = painterResource(id = R.drawable.cube),
-                    contentDescription = "Import Model",
-                    tint = darkBlack,
-                    modifier = Modifier.size(32.dp)
-                )
+                // Bluetooth button
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .width(bluetoothButtonWidth)
+                        .height(controlButtonSize)
+                        .border(BorderStroke(borderWidth, darkOlive), CircleShape)
+                        .clip(CircleShape)
+                        .clickable(
+                            onClick = {
+                                if (onRequestBluetooth()) {
+                                    pairedDevices = getPairedDevices()
+                                    showDeviceDialog = true
+                                    scope.launch {
+                                        delay(2500L)
+                                        pairedDevices = getPairedDevices()
+                                    }
+                                } else {
+                                    showDeviceDialog = false
+                                    pairedDevices = emptyList()
+                                }
+                            },
+                            indication = ripple(bounded = true, color = lightBlack),
+                            interactionSource = remember { MutableInteractionSource() },
+                        ),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(controlButtonSize)
+                            .align(Alignment.CenterStart),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.bluetooth),
+                            contentDescription = if (isBleConnected) "Disconnect" else "Connect",
+                            tint = darkBlack,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+
+                    Text(
+                        text = "DISCONNECT",
+                        fontFamily = font,
+                        fontSize = subtitleTextSize.value.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = darkBlack,
+                        letterSpacing = 1.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .padding(start = controlButtonSize + 12.dp, end = 20.dp)
+                            .alpha(disconnectTextAlpha)
+                    )
+                }
+
+                // Model import button
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .size(controlButtonSize)
+                        .border(BorderStroke(borderWidth, darkOlive), CircleShape)
+                        .clip(CircleShape)
+                        .clickable(
+                            onClick = { onPickModel() },
+                            indication = ripple(bounded = true, color = lightBlack),
+                            interactionSource = remember { MutableInteractionSource() },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.cube),
+                        contentDescription = "Import Model",
+                        tint = darkBlack,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
             }
         }
 
