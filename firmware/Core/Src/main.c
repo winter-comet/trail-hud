@@ -186,7 +186,17 @@ void StartDebugTask(void* argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void HM10_SetName_TrailModule(void)
+{
+    const char *cmd_name  = "AT+NAMETrail-Module\r\n";
+    const char *cmd_reset = "AT+RESET\r\n";
 
+    HAL_UART_Transmit(&huart1, (uint8_t *)cmd_name, strlen(cmd_name), 500);
+    HAL_Delay(500);
+
+    HAL_UART_Transmit(&huart1, (uint8_t *)cmd_reset, strlen(cmd_reset), 500);
+    HAL_Delay(1000);
+}
 /* USER CODE END 0 */
 
 /**
@@ -225,7 +235,7 @@ int main(void)
     /* USER CODE BEGIN 2 */
 
     /* USER CODE END 2 */
-
+    HM10_SetName_TrailModule();
     /* Init scheduler */
     osKernelInitialize();
 

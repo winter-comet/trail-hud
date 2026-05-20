@@ -73,6 +73,17 @@ import kotlin.math.*
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.activity.compose.BackHandler
+import androidx.annotation.RequiresPermission
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.core.tween
 
 // --- UI constants ---
 val font = FontFamily.Monospace
@@ -91,6 +102,18 @@ val lightBlack = Color(0x60000000)
 val darkBlack = Color(0xFF000000)
 val white = Color(0xFFFFFFFF)
 
+private data class BleDeviceMenuItem(
+    val address: String,
+    val name: String,
+    val device: BluetoothDevice
+)
+
+private data class ScrollbarMetrics(
+    val isVisible: Boolean,
+    val heightFraction: Float,
+    val progress: Float
+)
+
 class MainActivity : ComponentActivity() {
 
     // --- Bluetooth & sensors state ---
@@ -102,10 +125,13 @@ class MainActivity : ComponentActivity() {
     private var locationListener: LocationListener? = null
 
     private val discoveredDevices = linkedMapOf<String, BluetoothDevice>()
-    private var lastLocation: Location? = null
-    private var lastRotationQuaternion: FloatArray? = null
-    private var lastLinkRssiDbm: Int? = null
+    private var lastLinkRssiDbm by mutableStateOf<Int?>(null)
     private var updateRateSeconds: Long = TrailHudPacket.DEFAULT_UPDATE_RATE_SECONDS
+
+    @Volatile
+    private var lastLocation: Location? = null
+    @Volatile
+    private var lastRotationQuaternion: FloatArray? = null
 
     private val updateRateMs: Long
         get() = updateRateSeconds.coerceAtLeast(1L) * 1000L
@@ -116,11 +142,29 @@ class MainActivity : ComponentActivity() {
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            discoveredDevices[result.device.address] = result.device
+            this@MainActivity.onScanResult(callbackType, result)
         }
 
         override fun onBatchScanResults(results: MutableList<ScanResult>) {
-            results.forEach { discoveredDevices[it.device.address] = it.device }
+            this@MainActivity.onBatchScanResults(results)
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            Log.e("TrailHUD", "Scan failed with error: $errorCode")
+        }
+    }
+
+    private fun onScanResult(callbackType: Int, result: ScanResult) {
+        lifecycleScope.launch(Dispatchers.Main) {
+            discoveredDevices[result.device.address] = result.device
+        }
+    }
+
+    private fun onBatchScanResults(results: MutableList<ScanResult>) {
+        lifecycleScope.launch(Dispatchers.Main) {
+            results.forEach { result ->
+                discoveredDevices[result.device.address] = result.device
+            }
         }
     }
 
@@ -172,6 +216,7 @@ class MainActivity : ComponentActivity() {
             TrailHUDTheme {
                 MainScreen(
                     isBleConnected = isBleConnected,
+                    currentRssiDbm = lastLinkRssiDbm,
                     onRequestBluetooth = { handleBluetoothButtonPress() },
                     getPairedDevices = { getPairedDevices() },
                     onConnect = { device -> connectToDevice(device) },
@@ -202,17 +247,21 @@ class MainActivity : ComponentActivity() {
             },
             onDisconnected = {
                 lifecycleScope.launch(Dispatchers.Main) {
+                    lastLinkRssiDbm = null
                     isBleConnected = false
                     stopBroadcasting()
                 }
             },
             onRssiRead = { rssi ->
-                lastLinkRssiDbm = rssi
                 Log.d("TrailHUD", "BLE RSSI: $rssi dBm")
+                lifecycleScope.launch(Dispatchers.Main) {
+                    lastLinkRssiDbm = rssi
+                }
             },
             onError = { error ->
                 Log.e("TrailHUD", error)
                 lifecycleScope.launch(Dispatchers.Main) {
+                    lastLinkRssiDbm = null
                     isBleConnected = false
                     stopBroadcasting()
                 }
@@ -326,6 +375,7 @@ class MainActivity : ComponentActivity() {
         return discoveredDevices.values.distinctBy { it.address }
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
     private fun startBleScan() {
         if (!hasBluetoothScanPermission()) return
         if (bluetoothAdapter?.isEnabled != true) return
@@ -345,6 +395,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
     private fun stopBleScan() {
         if (hasBluetoothScanPermission()) {
             bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
@@ -354,6 +405,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // --- Permissions logic ---
+    @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
     private fun enableBluetoothAndScan() {
         if (bluetoothAdapter?.isEnabled == false) {
             val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
@@ -393,18 +445,18 @@ class MainActivity : ComponentActivity() {
 
     private fun hasBluetoothConnectPermission(): Boolean {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-            ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ) == PackageManager.PERMISSION_GRANTED
+                ActivityCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                ) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun hasBluetoothScanPermission(): Boolean {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-            ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_SCAN
-            ) == PackageManager.PERMISSION_GRANTED
+                ActivityCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.BLUETOOTH_SCAN
+                ) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun hasLocationPermission(): Boolean {
@@ -423,6 +475,7 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(
     modifier: Modifier = Modifier,
     isBleConnected: Boolean = false,
+    currentRssiDbm: Int? = null,
     onRequestBluetooth: () -> Boolean = { true },
     getPairedDevices: () -> List<BluetoothDevice> = { emptyList() },
     onConnect: (BluetoothDevice) -> Unit = {},
@@ -430,7 +483,6 @@ fun MainScreen(
 ) {
     // --- App state ---
     var rawHeading by remember { mutableFloatStateOf(0f) }
-    var menuExpanded by remember { mutableStateOf(false) }
     var showDeviceDialog by remember { mutableStateOf(false) }
     var pairedDevices by remember { mutableStateOf<List<BluetoothDevice>>(emptyList()) }
 
@@ -473,305 +525,391 @@ fun MainScreen(
                         rawHeading = lastTarget
                     }
                 }
+
                 override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
             }
 
-            sensorManager?.registerListener(listener, rotationSensor, SensorManager.SENSOR_DELAY_GAME)
+            sensorManager?.registerListener(
+                listener,
+                rotationSensor,
+                SensorManager.SENSOR_DELAY_GAME
+            )
             onDispose { sensorManager?.unregisterListener(listener) }
         }
     }
 
     // --- GUI layout ---
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(lightOlive)
-            .statusBarsPadding(),
-    ) {
-
-        // --- Header ---
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(32.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "TRAIL-APP",
-                fontSize = (titleTextSize.value - 4).sp,
-                fontFamily = font,
-                color = darkBlack,
-                letterSpacing = 2.sp,
-                modifier = Modifier.weight(1f),
-            )
-            Box {
-                Box(
-                    modifier = Modifier
-                        .size(titleTextSize + (iconRipplePadding * 2))
-                        .clip(RoundedCornerShape(smallBorderRadius))
-                        .clickable(
-                            onClick = { menuExpanded = !menuExpanded },
-                            indication = ripple(bounded = true, color = lightBlack),
-                            interactionSource = remember { MutableInteractionSource() },
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.menu),
-                        contentDescription = "Menu",
-                        tint = darkBlack,
-                        modifier = Modifier.size(titleTextSize),
-                    )
-                }
-            }
-        }
-
-        // --- Body ---
+    Box {
         Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            modifier = modifier
+                .fillMaxSize()
+                .background(lightOlive)
+                .statusBarsPadding(),
         ) {
 
-            // Compass area (Liquid Glass style)
-            Box(
+            // --- Header ---
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .shadow(
-                        elevation = 20.dp,
-                        shape = RoundedCornerShape(largeBorderRadius),
-                        clip = false,
-                        ambientColor = Color.Black.copy(alpha = 0.15f),
-                        spotColor = Color.Black.copy(alpha = 0.25f)
-                    )
-                    .background(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                lightOlive,
-                                lightOlive
-                            )
-                        ),
-                        shape = RoundedCornerShape(largeBorderRadius)
-                    )
-                    .border(
-                        width = 1.dp,
-                        brush = Brush.linearGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = 0.4f),
-                                Color.White.copy(alpha = 0.1f),
-                                Color.Transparent
-                            ),
-                            start = Offset(0f, 0f),
-                            end = Offset(1000f, 1000f)
-                        ),
-                        shape = RoundedCornerShape(largeBorderRadius)
-                    ),
-                contentAlignment = Alignment.Center
+                    .padding(32.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Section Title & Icon
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(start = 16.dp, top = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.compass),
-                        contentDescription = null,
-                        tint = darkBlack,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Text(
-                        text = "COMPASS",
-                        fontSize = subtitleTextSize.value.sp,
-                        fontFamily = font,
-                        color = darkBlack,
-                        letterSpacing = 1.sp
-                    )
-                }
-
-                ArcCompass(heading = heading, color = darkBlack)
-
                 Text(
-                    text = "${(ceil(((heading % 360f + 360f) % 360f).toDouble()).toInt() % 360)}°",
+                    text = "TRAIL-APP",
+                    fontSize = (titleTextSize.value - 4).sp,
                     fontFamily = font,
-                    fontSize = (titleTextSize.value + 4).sp,
-                    fontWeight = FontWeight.Bold,
                     color = darkBlack,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 24.dp)
+                    letterSpacing = 2.sp,
+                    modifier = Modifier.weight(1f),
                 )
-            }
-
-            Spacer(modifier = Modifier.height(32.dp))
-
-            // Placeholder view
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(160.dp)
-                    .background(darkBlack, RoundedCornerShape(largeBorderRadius))
-                    .border(BorderStroke(borderWidth, darkBlack), RoundedCornerShape(largeBorderRadius))
-            ) {
-                // Section Title & Icon
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(start = 16.dp, top = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.cell_tower),
-                        contentDescription = null,
-                        tint = white,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Text(
-                        text = "CONNECTION",
-                        fontSize = subtitleTextSize.value.sp,
-                        fontFamily = font,
-                        color = white,
-                        letterSpacing = 1.sp
-                    )
-                }
-            }
-        }
-
-        // --- Controls ---
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 32.dp, vertical = 16.dp)
-        ) {
-            val controlButtonSize = 64.dp
-            val controlButtonGap = 16.dp
-            val expandedBluetoothWidth = maxWidth - controlButtonSize - controlButtonGap
-
-            val bluetoothButtonWidth by animateDpAsState(
-                targetValue = if (isBleConnected) expandedBluetoothWidth else controlButtonSize,
-                animationSpec = spring(
-                    stiffness = Spring.StiffnessMediumLow,
-                    dampingRatio = Spring.DampingRatioNoBouncy
-                ),
-                label = "bluetoothButtonWidth"
-            )
-
-            val disconnectTextAlpha by animateFloatAsState(
-                targetValue = if (isBleConnected) 1f else 0f,
-                animationSpec = spring(
-                    stiffness = Spring.StiffnessMediumLow,
-                    dampingRatio = Spring.DampingRatioNoBouncy
-                ),
-                label = "disconnectTextAlpha"
-            )
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(controlButtonSize)
-            ) {
-
-                // Bluetooth button
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .width(bluetoothButtonWidth)
-                        .height(controlButtonSize)
-                        .border(BorderStroke(borderWidth, darkOlive), CircleShape)
-                        .clip(CircleShape)
-                        .clickable(
-                            onClick = {
-                                if (onRequestBluetooth()) {
-                                    pairedDevices = getPairedDevices()
-                                    showDeviceDialog = true
-                                    scope.launch {
-                                        delay(2500L)
-                                        pairedDevices = getPairedDevices()
-                                    }
-                                } else {
-                                    showDeviceDialog = false
-                                    pairedDevices = emptyList()
-                                }
-                            },
-                            indication = ripple(bounded = true, color = lightBlack),
-                            interactionSource = remember { MutableInteractionSource() },
-                        ),
-                ) {
+                Box {
                     Box(
                         modifier = Modifier
-                            .size(controlButtonSize)
-                            .align(Alignment.CenterStart),
-                        contentAlignment = Alignment.Center
+                            .size(titleTextSize + (iconRipplePadding * 2))
+                            .clip(RoundedCornerShape(smallBorderRadius))
+                            .clickable(
+                                onClick = { },
+                                indication = ripple(bounded = true, color = lightBlack),
+                                interactionSource = remember { MutableInteractionSource() },
+                            ),
+                        contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            painter = painterResource(id = R.drawable.bluetooth),
-                            contentDescription = if (isBleConnected) "Disconnect" else "Connect",
+                            painter = painterResource(id = R.drawable.menu),
+                            contentDescription = "Menu",
+                            tint = darkBlack,
+                            modifier = Modifier.size(titleTextSize),
+                        )
+                    }
+                }
+            }
+
+            // --- Body ---
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+
+                // Compass area (Liquid Glass style)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f)
+                        .shadow(
+                            elevation = 20.dp,
+                            shape = RoundedCornerShape(largeBorderRadius),
+                            clip = false,
+                            ambientColor = Color.Black.copy(alpha = 0.15f),
+                            spotColor = Color.Black.copy(alpha = 0.25f)
+                        )
+                        .background(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    lightOlive,
+                                    lightOlive
+                                )
+                            ),
+                            shape = RoundedCornerShape(largeBorderRadius)
+                        )
+                        .border(
+                            width = 1.dp,
+                            brush = Brush.linearGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = 0.4f),
+                                    Color.White.copy(alpha = 0.1f),
+                                    Color.Transparent
+                                ),
+                                start = Offset(0f, 0f),
+                                end = Offset(1000f, 1000f)
+                            ),
+                            shape = RoundedCornerShape(largeBorderRadius)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    // Section Title & Icon
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(start = 16.dp, top = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.compass),
+                            contentDescription = null,
+                            tint = darkBlack,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Text(
+                            text = "COMPASS",
+                            fontSize = subtitleTextSize.value.sp,
+                            fontFamily = font,
+                            color = darkBlack,
+                            letterSpacing = 1.sp
+                        )
+                    }
+
+                    ArcCompass(heading = heading, color = darkBlack)
+
+                    Text(
+                        text = "${(ceil(((heading % 360f + 360f) % 360f).toDouble()).toInt() % 360)}°",
+                        fontFamily = font,
+                        fontSize = (titleTextSize.value + 4).sp,
+                        fontWeight = FontWeight.Bold,
+                        color = darkBlack,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 24.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(32.dp))
+
+                // Connection status
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp)
+                        .background(darkBlack, RoundedCornerShape(largeBorderRadius))
+                        .border(
+                            BorderStroke(borderWidth, darkBlack),
+                            RoundedCornerShape(largeBorderRadius)
+                        )
+                ) {
+                    // Section Title & Icon
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(start = 16.dp, top = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.cell_tower),
+                            contentDescription = null,
+                            tint = white,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Text(
+                            text = "CONNECTION",
+                            fontSize = subtitleTextSize.value.sp,
+                            fontFamily = font,
+                            color = white,
+                            letterSpacing = 1.sp
+                        )
+                    }
+
+                    SignalStrengthIndicator(
+                        isConnected = isBleConnected,
+                        rssiDbm = currentRssiDbm,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                    )
+                }
+            }
+
+            // --- Controls ---
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(start = 32.dp, end = 32.dp, bottom = 32.dp)
+            ) {
+                val controlButtonSize = 64.dp
+                val controlButtonGap = 16.dp
+                val expandedBluetoothWidth = maxWidth - controlButtonSize - controlButtonGap
+
+                val bluetoothButtonWidth by animateDpAsState(
+                    targetValue = if (isBleConnected) expandedBluetoothWidth else controlButtonSize,
+                    animationSpec = spring(
+                        stiffness = Spring.StiffnessMediumLow,
+                        dampingRatio = Spring.DampingRatioNoBouncy
+                    ),
+                    label = "bluetoothButtonWidth"
+                )
+
+                val disconnectTextAlpha by animateFloatAsState(
+                    targetValue = if (isBleConnected) 1f else 0f,
+                    animationSpec = spring(
+                        stiffness = Spring.StiffnessMediumLow,
+                        dampingRatio = Spring.DampingRatioNoBouncy
+                    ),
+                    label = "disconnectTextAlpha"
+                )
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(controlButtonSize)
+                ) {
+
+                    // Bluetooth button
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .width(bluetoothButtonWidth)
+                            .height(controlButtonSize)
+                            .border(BorderStroke(borderWidth, darkOlive), CircleShape)
+                            .clip(CircleShape)
+                            .clickable(
+                                onClick = {
+                                    if (onRequestBluetooth()) {
+                                        pairedDevices = getPairedDevices()
+                                        showDeviceDialog = true
+                                        scope.launch {
+                                            delay(4200L)
+                                            pairedDevices = getPairedDevices()
+                                        }
+                                    } else {
+                                        showDeviceDialog = false
+                                        pairedDevices = emptyList()
+                                    }
+                                },
+                                indication = ripple(bounded = true, color = lightBlack),
+                                interactionSource = remember { MutableInteractionSource() },
+                            ),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(controlButtonSize)
+                                .align(Alignment.CenterStart),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.bluetooth),
+                                contentDescription = if (isBleConnected) "Disconnect" else "Connect",
+                                tint = darkBlack,
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+
+                        Text(
+                            text = "DISCONNECT",
+                            fontFamily = font,
+                            fontSize = subtitleTextSize.value.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = darkBlack,
+                            letterSpacing = 1.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Clip,
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .padding(start = controlButtonSize + 12.dp, end = 20.dp)
+                                .alpha(disconnectTextAlpha)
+                        )
+                    }
+
+                    // Model import button
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .size(controlButtonSize)
+                            .border(BorderStroke(borderWidth, darkOlive), CircleShape)
+                            .clip(CircleShape)
+                            .clickable(
+                                onClick = { onPickModel() },
+                                indication = ripple(bounded = true, color = lightBlack),
+                                interactionSource = remember { MutableInteractionSource() },
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.cube),
+                            contentDescription = "Import Model",
                             tint = darkBlack,
                             modifier = Modifier.size(32.dp)
                         )
                     }
-
-                    Text(
-                        text = "DISCONNECT",
-                        fontFamily = font,
-                        fontSize = subtitleTextSize.value.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = darkBlack,
-                        letterSpacing = 1.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Clip,
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .padding(start = controlButtonSize + 12.dp, end = 20.dp)
-                            .alpha(disconnectTextAlpha)
-                    )
-                }
-
-                // Model import button
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .size(controlButtonSize)
-                        .border(BorderStroke(borderWidth, darkOlive), CircleShape)
-                        .clip(CircleShape)
-                        .clickable(
-                            onClick = { onPickModel() },
-                            indication = ripple(bounded = true, color = lightBlack),
-                            interactionSource = remember { MutableInteractionSource() },
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.cube),
-                        contentDescription = "Import Model",
-                        tint = darkBlack,
-                        modifier = Modifier.size(32.dp)
-                    )
                 }
             }
         }
+    }
 
-        if (showDeviceDialog) {
-            BluetoothDeviceDialog(
-                devices = pairedDevices,
-                onDeviceSelected = { device ->
-                    onConnect(device)
-                    showDeviceDialog = false
-                },
-                onDismiss = { showDeviceDialog = false }
+    BluetoothDeviceDialog(
+        visible = showDeviceDialog,
+        devices = pairedDevices,
+        onDeviceSelected = { device ->
+            onConnect(device)
+            showDeviceDialog = false
+        },
+        onDismiss = { showDeviceDialog = false }
+    )
+}
+
+@Composable
+private fun SignalStrengthIndicator(
+    isConnected: Boolean,
+    rssiDbm: Int?,
+    modifier: Modifier = Modifier,
+    totalBars: Int = 28
+) {
+    var smoothedRssiDbm by remember { mutableStateOf<Float?>(null) }
+
+    LaunchedEffect(isConnected, rssiDbm) {
+        if (!isConnected || rssiDbm == null) {
+            smoothedRssiDbm = null
+        } else {
+            val current = smoothedRssiDbm
+            val target = rssiDbm.toFloat()
+
+            smoothedRssiDbm = if (current == null) {
+                target
+            } else {
+                current + ((target - current) * 0.35f)
+            }
+        }
+    }
+
+    val targetFilledBars = rssiToFilledBars(
+        isConnected = isConnected,
+        rssiDbm = smoothedRssiDbm,
+        totalBars = totalBars
+    )
+
+    val animatedFilledBars by animateFloatAsState(
+        targetValue = targetFilledBars,
+        animationSpec = tween(durationMillis = 800),
+        label = "signalStrengthBars"
+    )
+
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        repeat(totalBars) { index ->
+            Box(
+                modifier = Modifier
+                    .width(6.dp)
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(
+                        if (index < animatedFilledBars) lightOlive else white
+                    )
             )
         }
-
-        Spacer(modifier = Modifier.height(16.dp).navigationBarsPadding())
     }
+}
+
+private fun rssiToFilledBars(
+    isConnected: Boolean,
+    rssiDbm: Float?,
+    totalBars: Int
+): Float {
+    if (!isConnected || rssiDbm == null) return 0f
+
+    val clampedRssi = rssiDbm.coerceIn(-100f, -45f)
+    val normalized = (clampedRssi + 100f) / 55f
+
+    return (normalized * totalBars)
+        .coerceIn(0f, totalBars.toFloat())
 }
 
 @Composable
@@ -869,85 +1007,275 @@ fun ArcCompass(
 
 @Composable
 fun BluetoothDeviceDialog(
+    visible: Boolean,
     devices: List<BluetoothDevice>,
     onDeviceSelected: (BluetoothDevice) -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val menuTextSize = 12.dp
+    val listState = rememberLazyListState()
 
-    // Bluetooth devices select
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(32.dp)
-            .border(BorderStroke(borderWidth, darkBlack), RoundedCornerShape(largeBorderRadius)),
-        shape = RoundedCornerShape(largeBorderRadius),
-        containerColor = darkOlive,
-        title = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    "BLE-DEVICES",
-                    fontFamily = font,
-                    fontSize = (bodyTextSize.value).sp,
-                    color = darkBlack,
-                    letterSpacing = 2.sp
+    val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        ActivityCompat.checkSelfPermission(
+            context,
+            Manifest.permission.BLUETOOTH_CONNECT
+        ) == PackageManager.PERMISSION_GRANTED
+    } else true
+
+    val visibleDevices = remember(devices, hasPermission) {
+        if (!hasPermission) {
+            emptyList()
+        } else {
+            devices
+                .distinctBy { it.address }
+                .map { device ->
+                    BleDeviceMenuItem(
+                        address = device.address,
+                        name = device.name?.uppercase() ?: "UNKNOWN BLE DEVICE",
+                        device = device
+                    )
+                }
+        }
+    }
+
+    val scrollbarMetrics by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val totalItems = layoutInfo.totalItemsCount
+            val visibleItems = layoutInfo.visibleItemsInfo.size
+
+            if (totalItems <= visibleItems || totalItems == 0) {
+                ScrollbarMetrics(
+                    isVisible = false,
+                    heightFraction = 1f,
+                    progress = 0f
                 )
-                Spacer(modifier = Modifier.height(8.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.4f)
-                        .height(borderWidth)
-                        .background(darkBlack)
+            } else {
+                val firstVisibleItem = layoutInfo.visibleItemsInfo.firstOrNull()
+                val itemHeight = firstVisibleItem?.size?.coerceAtLeast(1) ?: 1
+                val offsetProgress =
+                    listState.firstVisibleItemScrollOffset.toFloat() / itemHeight.toFloat()
+
+                val scrollProgress = (
+                        (listState.firstVisibleItemIndex + offsetProgress) /
+                                (totalItems - visibleItems).coerceAtLeast(1).toFloat()
+                        ).coerceIn(0f, 1f)
+
+                ScrollbarMetrics(
+                    isVisible = true,
+                    heightFraction = (visibleItems.toFloat() / totalItems.toFloat())
+                        .coerceIn(0.18f, 1f),
+                    progress = scrollProgress
                 )
             }
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (devices.isEmpty()) {
-                    Text(
-                        "NO BLE DEVICES",
-                        fontFamily = font,
-                        color = darkBlack.copy(alpha = 0.6f),
-                        fontSize = (menuTextSize.value).sp,
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
-                    )
-                } else {
-                    devices.forEach { device ->
-                        val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                            ActivityCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.BLUETOOTH_CONNECT
-                            ) == PackageManager.PERMISSION_GRANTED
-                        } else true
+        }
+    }
 
-                        if (hasPermission) {
+    if (visible) {
+        BackHandler(onBack = onDismiss)
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(animationSpec = tween(durationMillis = 180)),
+            exit = fadeOut(animationSpec = tween(durationMillis = 150))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0x99D9D9D9))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onDismiss
+                    )
+            )
+        }
+
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(animationSpec = tween(durationMillis = 180)) +
+                    scaleIn(
+                        animationSpec = tween(durationMillis = 240),
+                        initialScale = 0.96f
+                    ),
+            exit = fadeOut(animationSpec = tween(durationMillis = 140)) +
+                    scaleOut(
+                        animationSpec = tween(durationMillis = 180),
+                        targetScale = 0.98f
+                    ),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 28.dp, vertical = 48.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 420.dp)
+                        .heightIn(max = 470.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = {}
+                        ),
+                    shape = RoundedCornerShape(30.dp),
+                    color = Color.White,
+                    shadowElevation = 16.dp,
+                    tonalElevation = 0.dp,
+                    border = BorderStroke(1.dp, Color.White)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(22.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
                             Box(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .border(
-                                        BorderStroke(1.dp, darkBlack.copy(alpha = 0.2f)),
-                                        RoundedCornerShape(smallBorderRadius)
-                                    )
-                                    .clip(RoundedCornerShape(smallBorderRadius))
-                                    .clickable { onDeviceSelected(device) }
-                                    .padding(12.dp)
+                                    .size(42.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(darkBlack.copy(alpha = 0.06f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.bluetooth),
+                                    contentDescription = null,
+                                    tint = darkBlack,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "BLE-DEVICES",
+                                    fontFamily = font,
+                                    fontSize = bodyTextSize.value.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = darkBlack,
+                                    letterSpacing = 1.5.sp
+                                )
+
+                                Text(
+                                    text = "SELECT A MODULE TO CONNECT",
+                                    fontFamily = font,
+                                    fontSize = menuTextSize.value.sp,
+                                    color = darkBlack.copy(alpha = 0.5f),
+                                    letterSpacing = 0.8.sp
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(18.dp))
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(1.dp)
+                                .background(darkBlack.copy(alpha = 0.08f))
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        BoxWithConstraints(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(260.dp)
+                        ) {
+                            val thumbHeight = (maxHeight * scrollbarMetrics.heightFraction)
+                                .coerceAtLeast(36.dp)
+                            val thumbOffset = (maxHeight - thumbHeight) * scrollbarMetrics.progress
+
+                            Row(modifier = Modifier.fillMaxSize()) {
+                                LazyColumn(
+                                    state = listState,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .padding(end = if (scrollbarMetrics.isVisible) 12.dp else 0.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                                    contentPadding = PaddingValues(vertical = 2.dp)
+                                ) {
+                                    if (visibleDevices.isEmpty()) {
+                                        item {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(120.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = "NO BLE DEVICES",
+                                                    fontFamily = font,
+                                                    color = darkBlack.copy(alpha = 0.45f),
+                                                    fontSize = menuTextSize.value.sp,
+                                                    letterSpacing = 1.sp
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        items(
+                                            items = visibleDevices,
+                                            key = { it.address }
+                                        ) { item ->
+                                            BleDeviceMenuRow(
+                                                item = item,
+                                                menuTextSize = menuTextSize,
+                                                onDeviceSelected = onDeviceSelected
+                                            )
+                                        }
+                                    }
+                                }
+
+                                if (scrollbarMetrics.isVisible) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .width(4.dp)
+                                            .clip(CircleShape)
+                                            .background(darkBlack.copy(alpha = 0.08f))
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .offset(y = thumbOffset)
+                                                .fillMaxWidth()
+                                                .height(thumbHeight)
+                                                .clip(CircleShape)
+                                                .background(darkBlack.copy(alpha = 0.35f))
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(18.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .background(darkBlack)
+                                    .clickable { onDismiss() }
+                                    .padding(horizontal = 18.dp, vertical = 10.dp)
                             ) {
                                 Text(
-                                    device.name?.uppercase() ?: "UNKNOWN",
+                                    text = "CANCEL",
                                     fontFamily = font,
-                                    color = darkBlack,
-                                    fontSize = (menuTextSize.value).sp,
+                                    color = white,
+                                    fontSize = menuTextSize.value.sp,
+                                    fontWeight = FontWeight.Bold,
                                     letterSpacing = 1.sp
                                 )
                             }
@@ -955,19 +1283,61 @@ fun BluetoothDeviceDialog(
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(
-                    "CANCEL",
-                    fontFamily = font,
-                    color = darkBlack,
-                    fontSize = (menuTextSize.value).sp,
-                    letterSpacing = 1.sp
+        }
+    }
+}
+
+
+@Composable
+private fun BleDeviceMenuRow(
+    item: BleDeviceMenuItem,
+    menuTextSize: androidx.compose.ui.unit.Dp,
+    onDeviceSelected: (BluetoothDevice) -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 54.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xFFF6F6F6))
+            .border(
+                BorderStroke(1.dp, darkBlack.copy(alpha = 0.08f)),
+                RoundedCornerShape(18.dp)
+            )
+            .clickable { onDeviceSelected(item.device) }
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(darkBlack.copy(alpha = 0.06f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.bluetooth),
+                    contentDescription = null,
+                    tint = darkBlack,
+                    modifier = Modifier.size(18.dp)
                 )
             }
+
+            Text(
+                text = item.name,
+                fontFamily = font,
+                color = darkBlack,
+                fontSize = menuTextSize.value.sp,
+                letterSpacing = 1.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
         }
-    )
+    }
 }
 
 @Preview(showBackground = true)
