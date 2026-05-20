@@ -130,24 +130,17 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <stdio.h>
-#include <string.h>
 #include "hm10.h"
+#include "debug_terminal.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef enum
-{
-    DEBUG_MODE_PINGS = 0,
-    DEBUG_MODE_PHONE_DATA
-} DebugTerminalMode;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define DEBUG_PRINT_SIZE 220U
 #define BLE_RX_LINE_SIZE 220U
 /* USER CODE END PD */
 
@@ -169,7 +162,7 @@ const osThreadAttr_t defaultTask_attributes = {
     .priority = (osPriority_t)osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
-static char debug_print[DEBUG_PRINT_SIZE];
+static HM10_HandleTypeDef hm10;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -186,17 +179,7 @@ void StartDebugTask(void* argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static void HM10_SetName_TrailModule(void)
-{
-    const char *cmd_name  = "AT+NAMETrail-Module\r\n";
-    const char *cmd_reset = "AT+RESET\r\n";
 
-    HAL_UART_Transmit(&huart1, (uint8_t *)cmd_name, strlen(cmd_name), 500);
-    HAL_Delay(500);
-
-    HAL_UART_Transmit(&huart1, (uint8_t *)cmd_reset, strlen(cmd_reset), 500);
-    HAL_Delay(1000);
-}
 /* USER CODE END 0 */
 
 /**
@@ -233,9 +216,10 @@ int main(void)
     MX_USART3_UART_Init();
     MX_USART1_UART_Init();
     /* USER CODE BEGIN 2 */
-
+    if (HM10_Init(&hm10, &huart1) != HM10_OK) { Error_Handler(); }
+    HM10_SetNameAndReset(&hm10, "Trail-Module", 1000U);
     /* USER CODE END 2 */
-    HM10_SetName_TrailModule();
+
     /* Init scheduler */
     osKernelInitialize();
 
@@ -466,151 +450,6 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-static void PrintDebugTitle(void)
-{
-    static const char boot[] =
-        "\r\n"
-        "+===========================================================+\r\n"
-        "| TRAIL-HUD STM32 DEBUG TERMINAL                            |\r\n"
-        "+===========================================================+\r\n"
-        "| Board : STM32H750B-DK                                     |\r\n"
-        "| BLE   : HM-10 / AT-09 on USART1                           |\r\n"
-        "| Debug : USART3 / ST-LINK VCP / PuTTY / 9600 8N1           |\r\n"
-        "+-----------------------------------------------------------+\r\n"
-        "| Default mode : PINGS                                      |\r\n"
-        "| Press 'm'    : switch between PINGS and PHONE DATA        |\r\n"
-        "+-----------------------------------------------------------+\r\n"
-        "| PINGS      : show STM32 -> HM-10 ping activity            |\r\n"
-        "| PHONE DATA : show complete lines received from the phone  |\r\n"
-        "+===========================================================+\r\n"
-        "\r\n";
-
-    HAL_UART_Transmit(&huart3,
-                      (uint8_t*)boot,
-                      (uint16_t)(sizeof(boot) - 1U),
-                      2000U);
-}
-
-static const char* DebugModeName(DebugTerminalMode mode) { return (mode == DEBUG_MODE_PHONE_DATA) ? "PHONE DATA" : "PINGS"; }
-static void PrintDebugLine(const char* text)
-{
-    int len;
-
-    len = snprintf(debug_print,
-                   sizeof(debug_print),
-                   "> %s\r\n",
-                   (text != NULL) ? text : "(null)");
-
-    if (len <= 0) return;
-    if (len >= sizeof(debug_print)) len = sizeof(debug_print) - 1;
-
-    HAL_UART_Transmit(&huart3,
-                      (uint8_t*)debug_print,
-                      (uint16_t)len,
-                      1000U);
-}
-static void PrintDebugMode(DebugTerminalMode mode)
-{
-    int len;
-
-    len = snprintf(debug_print,
-                   sizeof(debug_print),
-                   "> DEBUG MODE: %s\r\n",
-                   DebugModeName(mode));
-
-    if (len <= 0) return;
-    if (len >= (int)sizeof(debug_print)) len = (int)sizeof(debug_print) - 1;
-
-    HAL_UART_Transmit(&huart3,
-                      (uint8_t*)debug_print,
-                      (uint16_t)len,
-                      1000U);
-}
-static void PrintBlePacketDebug(const char* packet)
-{
-    int len;
-    size_t packet_len;
-
-    if (packet == NULL) return;
-
-    packet_len = strlen(packet);
-    if (packet_len == 0U) return;
-
-    if ((packet[0] == '[') && (packet[packet_len - 1U] == ']'))
-    {
-        PrintDebugLine("BLE <- PHONE: phone pose packet received");
-    }
-    else
-    {
-        PrintDebugLine("BLE <- PHONE: unrecognized line received");
-    }
-
-    len = snprintf(debug_print,
-                   sizeof(debug_print),
-                   "  %s\r\n",
-                   packet);
-
-    if (len <= 0) return;
-    if (len >= (int)sizeof(debug_print)) len = (int)sizeof(debug_print) - 1;
-
-    HAL_UART_Transmit(&huart3,
-                      (uint8_t*)debug_print,
-                      (uint16_t)len,
-                      1000U);
-}
-static void HandleDebugTerminalInput(DebugTerminalMode* mode)
-{
-    uint8_t rx_byte = 0U;
-
-    if (mode == NULL) return;
-
-    while (HAL_UART_Receive(&huart3, &rx_byte, 1U, 0U) == HAL_OK)
-    {
-        if ((rx_byte == 'm') || (rx_byte == 'M'))
-        {
-            *mode = (*mode == DEBUG_MODE_PINGS)
-                        ? DEBUG_MODE_PHONE_DATA
-                        : DEBUG_MODE_PINGS;
-
-            PrintDebugMode(*mode);
-        }
-    }
-}
-static void HandleBleRxByte(uint8_t rx_byte, char* rx_line, uint16_t* rx_len, uint16_t rx_line_size, DebugTerminalMode mode)
-{
-    if ((rx_line == NULL) || (rx_len == NULL) || (rx_line_size == 0U)) return;
-    if (rx_byte == '\r') return;
-
-    if (rx_byte == '\n')
-    {
-        rx_line[*rx_len] = '\0';
-
-        if ((*rx_len > 0U) && (mode == DEBUG_MODE_PHONE_DATA))
-        {
-            PrintBlePacketDebug(rx_line);
-        }
-
-        *rx_len = 0U;
-        rx_line[0] = '\0';
-        return;
-    }
-
-    if (*rx_len < (uint16_t)(rx_line_size - 1U))
-    {
-        rx_line[*rx_len] = (char)rx_byte;
-        (*rx_len)++;
-    }
-    else
-    {
-        *rx_len = 0U;
-        rx_line[0] = '\0';
-
-        if (mode == DEBUG_MODE_PHONE_DATA)
-        {
-            PrintDebugLine("BLE <- PHONE: RX line overflow, dropped partial packet");
-        }
-    }
-}
 
 /* USER CODE END 4 */
 
@@ -624,89 +463,72 @@ static void HandleBleRxByte(uint8_t rx_byte, char* rx_line, uint16_t* rx_len, ui
 void StartDebugTask(void* argument)
 {
     /* USER CODE BEGIN 5 */
-
     uint32_t last_tick = 0U;
     uint8_t rx_byte = 0U;
     char ble_rx_line[BLE_RX_LINE_SIZE] = {0};
     uint16_t ble_rx_len = 0U;
     GPIO_PinState last_state;
-    DebugTerminalMode debug_mode = DEBUG_MODE_PINGS;
+    DebugTerminalMode debug_mode = DEBUG_TERMINAL_MODE_PINGS;
 
     (void)argument;
 
-    PrintDebugTitle();
-    PrintDebugMode(debug_mode);
+    DebugTerminal_PrintTitle(&huart3);
+    DebugTerminal_PrintMode(&huart3, debug_mode);
 
     last_state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
-    PrintDebugLine((last_state == GPIO_PIN_SET)
-                       ? "HM10 STATE: CONNECTED"
-                       : "HM10 STATE: DISCONNECTED");
+
+    DebugTerminal_PrintLine(&huart3,
+                            (last_state == GPIO_PIN_SET)
+                                ? "HM10 STATE: CONNECTED"
+                                : "HM10 STATE: DISCONNECTED");
 
     for (;;)
     {
         GPIO_PinState state;
+
         state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
-        HandleDebugTerminalInput(&debug_mode);
+
+        DebugTerminal_HandleInput(&huart3, &debug_mode);
 
         if (state != last_state)
         {
             last_state = state;
 
-            PrintDebugLine((state == GPIO_PIN_SET)
-                               ? "HM10 STATE: CONNECTED"
-                               : "HM10 STATE: DISCONNECTED");
+            DebugTerminal_PrintLine(&huart3,
+                                    (state == GPIO_PIN_SET)
+                                        ? "HM10 STATE: CONNECTED"
+                                        : "HM10 STATE: DISCONNECTED");
         }
 
-        if ((debug_mode == DEBUG_MODE_PINGS) &&
+        if ((debug_mode == DEBUG_TERMINAL_MODE_PINGS) &&
             (state == GPIO_PIN_SET) &&
             ((HAL_GetTick() - last_tick) >= 1000U))
         {
-            char ble_msg[48];
-            int ble_len = snprintf(ble_msg,
-                                   sizeof(ble_msg),
-                                   "stm32 ping received\r\n");
-
-            if ((ble_len > 0) && (ble_len < (int)sizeof(ble_msg)))
+            if (HM10_SendString(&hm10, "stm32 ping received\r\n") == HM10_OK)
             {
-                (void)HAL_UART_Transmit(&huart1,
-                                        (uint8_t*)ble_msg,
-                                        (uint16_t)ble_len,
-                                        500U);
-
-                int dbg_len = snprintf(debug_print,
-                                       sizeof(debug_print),
-                                       "> USART1 -> HM10: stm32 ping sent\r\n");
-
-                if (dbg_len > 0)
-                {
-                    if (dbg_len >= (int)sizeof(debug_print)) dbg_len = (int)sizeof(debug_print) - 1;
-
-                    HAL_UART_Transmit(&huart3,
-                                      (uint8_t*)debug_print,
-                                      (uint16_t)dbg_len,
-                                      1000U);
-                }
+                DebugTerminal_PrintLine(&huart3,
+                                        "USART1 -> HM10: stm32 ping sent");
             }
 
             last_tick = HAL_GetTick();
         }
-        else if (debug_mode != DEBUG_MODE_PINGS)
+        else if (debug_mode != DEBUG_TERMINAL_MODE_PINGS)
         {
             last_tick = HAL_GetTick();
         }
 
-        while (HAL_UART_Receive(&huart1, &rx_byte, 1U, 1U) == HAL_OK)
+        while (HM10_ReadByte(&hm10, &rx_byte, 1U) == HM10_OK)
         {
-            HandleBleRxByte(rx_byte,
-                            ble_rx_line,
-                            &ble_rx_len,
-                            sizeof(ble_rx_line),
-                            debug_mode);
+            DebugTerminal_HandleBleRxByte(&huart3,
+                                          rx_byte,
+                                          ble_rx_line,
+                                          &ble_rx_len,
+                                          sizeof(ble_rx_line),
+                                          debug_mode);
         }
 
         osDelay(1);
     }
-
     /* USER CODE END 5 */
 }
 

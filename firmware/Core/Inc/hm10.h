@@ -3,6 +3,7 @@
 
 #ifdef __cplusplus
 extern "C" {
+
 #endif
 
 #include "stm32h7xx_hal.h"
@@ -23,7 +24,7 @@ typedef enum
 
 typedef struct
 {
-    UART_HandleTypeDef *huart;
+    UART_HandleTypeDef* huart;
     uint32_t timeout_ms;
     uint32_t inter_byte_timeout_ms;
 } HM10_HandleTypeDef;
@@ -35,25 +36,25 @@ typedef struct
  * the HM-10 itself. Configure the USART/UART peripheral in CubeMX first, then
  * pass the generated UART handle here.
  */
-HM10_StatusTypeDef HM10_Init(HM10_HandleTypeDef *hm10, UART_HandleTypeDef *huart);
+HM10_StatusTypeDef HM10_Init(HM10_HandleTypeDef* hm10, UART_HandleTypeDef* huart);
 
-HM10_StatusTypeDef HM10_SetTimeouts(HM10_HandleTypeDef *hm10,
+HM10_StatusTypeDef HM10_SetTimeouts(HM10_HandleTypeDef* hm10,
                                     uint32_t timeout_ms,
                                     uint32_t inter_byte_timeout_ms);
 
-HM10_StatusTypeDef HM10_SendBytes(HM10_HandleTypeDef *hm10,
-                                  const uint8_t *data,
+HM10_StatusTypeDef HM10_SendBytes(HM10_HandleTypeDef* hm10,
+                                  const uint8_t* data,
                                   uint16_t length);
 
-HM10_StatusTypeDef HM10_SendString(HM10_HandleTypeDef *hm10,
-                                   const char *text);
+HM10_StatusTypeDef HM10_SendString(HM10_HandleTypeDef* hm10,
+                                   const char* text);
 
 /**
  * @brief Receives exactly length bytes, blocking until all bytes arrive or the
  *        configured timeout expires.
  */
-HM10_StatusTypeDef HM10_ReceiveBytes(HM10_HandleTypeDef *hm10,
-                                     uint8_t *buffer,
+HM10_StatusTypeDef HM10_ReceiveBytes(HM10_HandleTypeDef* hm10,
+                                     uint8_t* buffer,
                                      uint16_t length);
 
 /**
@@ -64,14 +65,27 @@ HM10_StatusTypeDef HM10_ReceiveBytes(HM10_HandleTypeDef *hm10,
  * further byte arrives within inter_byte_timeout_ms. This is useful for simple
  * transparent BLE UART testing from apps such as nRF Connect.
  */
-HM10_StatusTypeDef HM10_ReadAvailable(HM10_HandleTypeDef *hm10,
-                                      uint8_t *buffer,
+HM10_StatusTypeDef HM10_ReadAvailable(HM10_HandleTypeDef* hm10,
+                                      uint8_t* buffer,
                                       uint16_t buffer_length,
-                                      uint16_t *received_length,
+                                      uint16_t* received_length,
                                       uint32_t first_byte_timeout_ms,
                                       uint32_t inter_byte_timeout_ms);
 
-const char *HM10_StatusToString(HM10_StatusTypeDef status);
+const char* HM10_StatusToString(HM10_StatusTypeDef status);
+
+HM10_StatusTypeDef HM10_ReadByte(HM10_HandleTypeDef *hm10,
+                                 uint8_t *byte,
+                                 uint32_t timeout_ms);
+
+HM10_StatusTypeDef HM10_Reset(HM10_HandleTypeDef *hm10);
+
+HM10_StatusTypeDef HM10_SetName(HM10_HandleTypeDef *hm10,
+                                const char *name);
+
+HM10_StatusTypeDef HM10_SetNameAndReset(HM10_HandleTypeDef *hm10,
+                                        const char *name,
+                                        uint32_t reset_settle_delay_ms);
 
 #ifdef __cplusplus
 }

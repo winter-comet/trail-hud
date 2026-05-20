@@ -1,23 +1,24 @@
 #include "hm10.h"
+#include <stdio.h>
 #include <string.h>
 
 static HM10_StatusTypeDef HM10_FromHALStatus(HAL_StatusTypeDef status)
 {
     switch (status)
     {
-        case HAL_OK:
-            return HM10_OK;
-        case HAL_TIMEOUT:
-            return HM10_TIMEOUT;
-        case HAL_BUSY:
-            return HM10_BUSY;
-        case HAL_ERROR:
-        default:
-            return HM10_ERROR;
+    case HAL_OK:
+        return HM10_OK;
+    case HAL_TIMEOUT:
+        return HM10_TIMEOUT;
+    case HAL_BUSY:
+        return HM10_BUSY;
+    case HAL_ERROR:
+    default:
+        return HM10_ERROR;
     }
 }
 
-static HM10_StatusTypeDef HM10_CheckHandle(const HM10_HandleTypeDef *hm10)
+static HM10_StatusTypeDef HM10_CheckHandle(const HM10_HandleTypeDef* hm10)
 {
     if (hm10 == NULL)
     {
@@ -32,7 +33,7 @@ static HM10_StatusTypeDef HM10_CheckHandle(const HM10_HandleTypeDef *hm10)
     return HM10_OK;
 }
 
-HM10_StatusTypeDef HM10_Init(HM10_HandleTypeDef *hm10, UART_HandleTypeDef *huart)
+HM10_StatusTypeDef HM10_Init(HM10_HandleTypeDef* hm10, UART_HandleTypeDef* huart)
 {
     if ((hm10 == NULL) || (huart == NULL))
     {
@@ -46,7 +47,7 @@ HM10_StatusTypeDef HM10_Init(HM10_HandleTypeDef *hm10, UART_HandleTypeDef *huart
     return HM10_OK;
 }
 
-HM10_StatusTypeDef HM10_SetTimeouts(HM10_HandleTypeDef *hm10,
+HM10_StatusTypeDef HM10_SetTimeouts(HM10_HandleTypeDef* hm10,
                                     uint32_t timeout_ms,
                                     uint32_t inter_byte_timeout_ms)
 {
@@ -63,8 +64,8 @@ HM10_StatusTypeDef HM10_SetTimeouts(HM10_HandleTypeDef *hm10,
     return HM10_OK;
 }
 
-HM10_StatusTypeDef HM10_SendBytes(HM10_HandleTypeDef *hm10,
-                                  const uint8_t *data,
+HM10_StatusTypeDef HM10_SendBytes(HM10_HandleTypeDef* hm10,
+                                  const uint8_t* data,
                                   uint16_t length)
 {
     HM10_StatusTypeDef status = HM10_CheckHandle(hm10);
@@ -85,13 +86,13 @@ HM10_StatusTypeDef HM10_SendBytes(HM10_HandleTypeDef *hm10,
     }
 
     return HM10_FromHALStatus(HAL_UART_Transmit(hm10->huart,
-                                                (uint8_t *)data,
+                                                (uint8_t*)data,
                                                 length,
                                                 hm10->timeout_ms));
 }
 
-HM10_StatusTypeDef HM10_SendString(HM10_HandleTypeDef *hm10,
-                                   const char *text)
+HM10_StatusTypeDef HM10_SendString(HM10_HandleTypeDef* hm10,
+                                   const char* text)
 {
     size_t length;
 
@@ -106,11 +107,11 @@ HM10_StatusTypeDef HM10_SendString(HM10_HandleTypeDef *hm10,
         return HM10_INVALID_ARGUMENT;
     }
 
-    return HM10_SendBytes(hm10, (const uint8_t *)text, (uint16_t)length);
+    return HM10_SendBytes(hm10, (const uint8_t*)text, (uint16_t)length);
 }
 
-HM10_StatusTypeDef HM10_ReceiveBytes(HM10_HandleTypeDef *hm10,
-                                     uint8_t *buffer,
+HM10_StatusTypeDef HM10_ReceiveBytes(HM10_HandleTypeDef* hm10,
+                                     uint8_t* buffer,
                                      uint16_t length)
 {
     HM10_StatusTypeDef status = HM10_CheckHandle(hm10);
@@ -136,10 +137,10 @@ HM10_StatusTypeDef HM10_ReceiveBytes(HM10_HandleTypeDef *hm10,
                                                hm10->timeout_ms));
 }
 
-HM10_StatusTypeDef HM10_ReadAvailable(HM10_HandleTypeDef *hm10,
-                                      uint8_t *buffer,
+HM10_StatusTypeDef HM10_ReadAvailable(HM10_HandleTypeDef* hm10,
+                                      uint8_t* buffer,
                                       uint16_t buffer_length,
-                                      uint16_t *received_length,
+                                      uint16_t* received_length,
                                       uint32_t first_byte_timeout_ms,
                                       uint32_t inter_byte_timeout_ms)
 {
@@ -188,23 +189,101 @@ HM10_StatusTypeDef HM10_ReadAvailable(HM10_HandleTypeDef *hm10,
     return HM10_OK;
 }
 
-const char *HM10_StatusToString(HM10_StatusTypeDef status)
+const char* HM10_StatusToString(HM10_StatusTypeDef status)
 {
     switch (status)
     {
-        case HM10_OK:
-            return "HM10_OK";
-        case HM10_ERROR:
-            return "HM10_ERROR";
-        case HM10_TIMEOUT:
-            return "HM10_TIMEOUT";
-        case HM10_BUSY:
-            return "HM10_BUSY";
-        case HM10_INVALID_ARGUMENT:
-            return "HM10_INVALID_ARGUMENT";
-        case HM10_NOT_INITIALIZED:
-            return "HM10_NOT_INITIALIZED";
-        default:
-            return "HM10_UNKNOWN_STATUS";
+    case HM10_OK:
+        return "HM10_OK";
+    case HM10_ERROR:
+        return "HM10_ERROR";
+    case HM10_TIMEOUT:
+        return "HM10_TIMEOUT";
+    case HM10_BUSY:
+        return "HM10_BUSY";
+    case HM10_INVALID_ARGUMENT:
+        return "HM10_INVALID_ARGUMENT";
+    case HM10_NOT_INITIALIZED:
+        return "HM10_NOT_INITIALIZED";
+    default:
+        return "HM10_UNKNOWN_STATUS";
     }
+}
+
+HM10_StatusTypeDef HM10_ReadByte(HM10_HandleTypeDef *hm10,
+                                 uint8_t *byte,
+                                 uint32_t timeout_ms)
+{
+    HM10_StatusTypeDef status = HM10_CheckHandle(hm10);
+
+    if (status != HM10_OK)
+    {
+        return status;
+    }
+
+    if (byte == NULL)
+    {
+        return HM10_INVALID_ARGUMENT;
+    }
+
+    return HM10_FromHALStatus(HAL_UART_Receive(hm10->huart,
+                                               byte,
+                                               1U,
+                                               timeout_ms));
+}
+
+HM10_StatusTypeDef HM10_Reset(HM10_HandleTypeDef *hm10)
+{
+    return HM10_SendString(hm10, "AT+RESET\r\n");
+}
+
+HM10_StatusTypeDef HM10_SetName(HM10_HandleTypeDef *hm10,
+                                const char *name)
+{
+    char command[40];
+    int command_len;
+
+    if ((name == NULL) || (name[0] == '\0'))
+    {
+        return HM10_INVALID_ARGUMENT;
+    }
+
+    command_len = snprintf(command,
+                           sizeof(command),
+                           "AT+NAME%s\r\n",
+                           name);
+
+    if ((command_len <= 0) || (command_len >= (int)sizeof(command)))
+    {
+        return HM10_INVALID_ARGUMENT;
+    }
+
+    return HM10_SendBytes(hm10,
+                          (const uint8_t *)command,
+                          (uint16_t)command_len);
+}
+
+HM10_StatusTypeDef HM10_SetNameAndReset(HM10_HandleTypeDef *hm10,
+                                        const char *name,
+                                        uint32_t reset_settle_delay_ms)
+{
+    HM10_StatusTypeDef status;
+
+    status = HM10_SetName(hm10, name);
+    if (status != HM10_OK)
+    {
+        return status;
+    }
+
+    HAL_Delay(500U);
+
+    status = HM10_Reset(hm10);
+    if (status != HM10_OK)
+    {
+        return status;
+    }
+
+    HAL_Delay(reset_settle_delay_ms);
+
+    return HM10_OK;
 }
