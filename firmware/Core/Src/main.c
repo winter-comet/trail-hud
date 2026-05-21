@@ -468,7 +468,7 @@ void StartDebugTask(void* argument)
     char ble_rx_line[BLE_RX_LINE_SIZE] = {0};
     uint16_t ble_rx_len = 0U;
     GPIO_PinState last_state;
-    DebugTerminalMode debug_mode = DEBUG_TERMINAL_MODE_PINGS;
+    DebugTerminalMode debug_mode = DEBUG_TERMINAL_MODE_WAITING;
 
     (void)argument;
 

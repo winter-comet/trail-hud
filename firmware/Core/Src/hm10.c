@@ -210,8 +210,8 @@ const char* HM10_StatusToString(HM10_StatusTypeDef status)
     }
 }
 
-HM10_StatusTypeDef HM10_ReadByte(HM10_HandleTypeDef *hm10,
-                                 uint8_t *byte,
+HM10_StatusTypeDef HM10_ReadByte(HM10_HandleTypeDef* hm10,
+                                 uint8_t* byte,
                                  uint32_t timeout_ms)
 {
     HM10_StatusTypeDef status = HM10_CheckHandle(hm10);
@@ -232,13 +232,13 @@ HM10_StatusTypeDef HM10_ReadByte(HM10_HandleTypeDef *hm10,
                                                timeout_ms));
 }
 
-HM10_StatusTypeDef HM10_Reset(HM10_HandleTypeDef *hm10)
+HM10_StatusTypeDef HM10_Reset(HM10_HandleTypeDef* hm10)
 {
     return HM10_SendString(hm10, "AT+RESET\r\n");
 }
 
-HM10_StatusTypeDef HM10_SetName(HM10_HandleTypeDef *hm10,
-                                const char *name)
+HM10_StatusTypeDef HM10_SetName(HM10_HandleTypeDef* hm10,
+                                const char* name)
 {
     char command[40];
     int command_len;
@@ -259,12 +259,12 @@ HM10_StatusTypeDef HM10_SetName(HM10_HandleTypeDef *hm10,
     }
 
     return HM10_SendBytes(hm10,
-                          (const uint8_t *)command,
+                          (const uint8_t*)command,
                           (uint16_t)command_len);
 }
 
-HM10_StatusTypeDef HM10_SetNameAndReset(HM10_HandleTypeDef *hm10,
-                                        const char *name,
+HM10_StatusTypeDef HM10_SetNameAndReset(HM10_HandleTypeDef* hm10,
+                                        const char* name,
                                         uint32_t reset_settle_delay_ms)
 {
     HM10_StatusTypeDef status;

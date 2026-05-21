@@ -11,7 +11,8 @@ extern "C" {
 
 typedef enum
 {
-    DEBUG_TERMINAL_MODE_PINGS = 0,
+    DEBUG_TERMINAL_MODE_WAITING = 0,
+    DEBUG_TERMINAL_MODE_PINGS,
     DEBUG_TERMINAL_MODE_PHONE_DATA
 } DebugTerminalMode;
 
