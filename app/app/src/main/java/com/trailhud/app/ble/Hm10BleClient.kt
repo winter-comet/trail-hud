@@ -1,261 +1,316 @@
 package com.trailhud.app.ble
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
-import androidx.annotation.RequiresPermission
-import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import com.trailhud.app.protocol.TrailHudPacket
 import java.nio.charset.StandardCharsets
-import java.util.ArrayDeque
 import java.util.UUID
 
 class Hm10BleClient(
     private val context: Context,
-    private val onReady: () -> Unit = {},
-    private val onDisconnected: () -> Unit = {},
-    private val onRssiRead: (Int) -> Unit = {},
-    private val onError: (String) -> Unit = {}
+    private val onReady: () -> Unit,
+    private val onDisconnected: () -> Unit,
+    private val onRssiRead: (Int) -> Unit,
+    private val onError: (String) -> Unit
 ) {
-    private val hm10ServiceUuid: UUID = UUID.fromString("0000FFE0-0000-1000-8000-00805F9B34FB")
-    private val hm10CharacteristicUuid: UUID = UUID.fromString("0000FFE1-0000-1000-8000-00805F9B34FB")
-
     private var gatt: BluetoothGatt? = null
     private var txCharacteristic: BluetoothGattCharacteristic? = null
     private val pendingChunks = ArrayDeque<ByteArray>()
-    private var writeInProgress = false
-    private var connectionState = BluetoothProfile.STATE_DISCONNECTED
-
-    val isActive: Boolean
-        get() = gatt != null
-
-    val isConnected: Boolean
-        get() = connectionState == BluetoothProfile.STATE_CONNECTED
+    private var isWriting = false
+    private val rxLineBuilder = StringBuilder()
 
     private val callback = object : BluetoothGattCallback() {
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            connectionState = newState
-
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                onError("GATT connection failed: status=$status")
-                closeGatt()
-                onDisconnected()
+                onError("BLE connection failed with status $status")
+                close()
                 return
             }
 
-            when (newState) {
-                BluetoothProfile.STATE_CONNECTED -> {
-                    if (!hasConnectPermission()) {
-                        closeGatt()
-                        onDisconnected()
-                        return
-                    }
-
-                    if (!gatt.discoverServices()) {
-                        onError("GATT service discovery was not accepted by Android")
-                        disconnect()
-                    }
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                if (hasBluetoothConnectPermission()) {
+                    gatt.discoverServices()
                 }
-
-                BluetoothProfile.STATE_DISCONNECTED -> {
-                    closeGatt()
-                    onDisconnected()
-                }
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                close()
+                onDisconnected()
             }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                onError("GATT service discovery failed: status=$status")
-                disconnect()
+                onError("BLE service discovery failed with status $status")
                 return
             }
 
             val characteristic = gatt
-                .getService(hm10ServiceUuid)
-                ?.getCharacteristic(hm10CharacteristicUuid)
+                .getService(HM10_SERVICE_UUID)
+                ?.getCharacteristic(HM10_CHARACTERISTIC_UUID)
 
             if (characteristic == null) {
-                onError("HM-10 UART characteristic FFE1 was not found")
-                disconnect()
+                onError("HM-10 BLE UART characteristic was not found")
                 return
             }
 
             txCharacteristic = characteristic
-            onReady()
+
+            if (!enableIncomingData(gatt, characteristic)) {
+                onReady()
+            }
         }
 
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        override fun onDescriptorWrite(
+            gatt: BluetoothGatt,
+            descriptor: BluetoothGattDescriptor,
+            status: Int
+        ) {
+            if (descriptor.uuid != CLIENT_CHARACTERISTIC_CONFIG_UUID) {
+                return
+            }
+
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                onReady()
+            } else {
+                onError("HM-10 notification setup failed with status $status")
+            }
+        }
+
         override fun onCharacteristicWrite(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
             status: Int
         ) {
-            writeInProgress = false
+            isWriting = false
 
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                onError("GATT write failed: status=$status")
-                synchronized(pendingChunks) { pendingChunks.clear() }
+                onError("BLE write failed with status $status")
+                pendingChunks.clear()
                 return
             }
 
             drainQueue()
         }
 
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic
+        ) {
+            @Suppress("DEPRECATION")
+            handleIncomingBytes(characteristic.value ?: return)
+        }
+
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray
+        ) {
+            handleIncomingBytes(value)
+        }
+
         override fun onReadRemoteRssi(gatt: BluetoothGatt, rssi: Int, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 onRssiRead(rssi)
-            } else {
-                onError("Remote RSSI read failed: status=$status")
             }
         }
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun connect(device: BluetoothDevice) {
-        if (!hasConnectPermission()) return
-
-        closeGatt()
-        connectionState = BluetoothProfile.STATE_CONNECTING
-
-        gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
-        } else {
-            @Suppress("DEPRECATION")
-            device.connectGatt(context, false, callback)
+        if (!hasBluetoothConnectPermission()) {
+            onError("Missing BLUETOOTH_CONNECT permission")
+            return
         }
 
-        if (gatt == null) {
-            connectionState = BluetoothProfile.STATE_DISCONNECTED
-            onError("GATT connection request was not accepted by Android")
-            onDisconnected()
-        }
+        @SuppressLint("MissingPermission")
+        gatt = device.connectGatt(context, false, callback)
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    fun disconnect() {
-        synchronized(pendingChunks) { pendingChunks.clear() }
-        writeInProgress = false
+    @SuppressLint("MissingPermission")
+    fun close() {
+        pendingChunks.clear()
+        isWriting = false
         txCharacteristic = null
+        rxLineBuilder.clear()
 
-        val currentGatt = gatt
-        if (currentGatt == null) {
-            connectionState = BluetoothProfile.STATE_DISCONNECTED
-            onDisconnected()
-            return
+        if (hasBluetoothConnectPermission()) {
+            gatt?.disconnect()
+            gatt?.close()
         }
 
-        if (!hasConnectPermission() || connectionState == BluetoothProfile.STATE_DISCONNECTED) {
-            closeGatt()
-            onDisconnected()
-            return
-        }
-
-        currentGatt.disconnect()
+        gatt = null
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    fun readRemoteRssi(): Boolean {
-        if (!hasConnectPermission() || !isConnected) return false
-
-        val accepted = gatt?.readRemoteRssi() ?: false
-        if (!accepted) {
-            onError("Remote RSSI read request was not accepted by Android")
-        }
-        return accepted
-    }
-
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun writeLine(line: String) {
-        if (!isConnected) return
+        val bytes = (line + "\n").toByteArray(StandardCharsets.UTF_8)
+        var offset = 0
 
-        val bytes = (line + "\n").toByteArray(StandardCharsets.US_ASCII)
-        synchronized(pendingChunks) {
-            bytes.asIterable()
-                .chunked(MAX_HM10_CHUNK_BYTES)
-                .forEach { chunk -> pendingChunks.add(chunk.toByteArray()) }
+        while (offset < bytes.size) {
+            val end = (offset + BLE_UART_CHUNK_SIZE).coerceAtMost(bytes.size)
+            pendingChunks.add(bytes.copyOfRange(offset, end))
+            offset = end
         }
 
         drainQueue()
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    fun close() {
-        closeGatt()
-        onDisconnected()
+    @SuppressLint("MissingPermission")
+    fun readRemoteRssi() {
+        if (hasBluetoothConnectPermission()) {
+            gatt?.readRemoteRssi()
+        }
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    private fun drainQueue() {
-        if (writeInProgress) return
-        if (!hasConnectPermission() || !isConnected) return
-
-        val nextChunk = synchronized(pendingChunks) {
-            if (pendingChunks.isEmpty()) null else pendingChunks.removeFirst()
-        } ?: return
-
-        val currentGatt = gatt ?: return
-        val characteristic = txCharacteristic ?: return
+    @SuppressLint("MissingPermission")
+    private fun enableIncomingData(
+        gatt: BluetoothGatt,
+        characteristic: BluetoothGattCharacteristic
+    ): Boolean {
         val properties = characteristic.properties
-
-        val writeType = if ((properties and BluetoothGattCharacteristic.PROPERTY_WRITE) != 0) {
-            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        } else {
-            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        val cccdValue = when {
+            properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0 ->
+                BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0 ->
+                BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+            else -> return false
         }
 
-        writeInProgress = true
+        if (!hasBluetoothConnectPermission()) {
+            onError("Missing BLUETOOTH_CONNECT permission")
+            return false
+        }
 
-        val accepted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            currentGatt.writeCharacteristic(characteristic, nextChunk, writeType) == BluetoothStatusCodes.SUCCESS
+        if (!gatt.setCharacteristicNotification(characteristic, true)) {
+            onError("HM-10 notification setup was rejected")
+            return false
+        }
+
+        val descriptor = characteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG_UUID)
+        if (descriptor == null) {
+            onError("HM-10 notification descriptor was not found")
+            return false
+        }
+
+        return writeDescriptorCompat(gatt, descriptor, cccdValue)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun writeDescriptorCompat(
+        gatt: BluetoothGatt,
+        descriptor: BluetoothGattDescriptor,
+        value: ByteArray
+    ): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            gatt.writeDescriptor(descriptor, value) == BluetoothStatusCodes.SUCCESS
         } else {
             @Suppress("DEPRECATION")
-            run {
-                characteristic.writeType = writeType
-                characteristic.value = nextChunk
-                currentGatt.writeCharacteristic(characteristic)
-            }
+            descriptor.value = value
+            @Suppress("DEPRECATION")
+            gatt.writeDescriptor(descriptor)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun drainQueue() {
+        val currentGatt = gatt ?: return
+        val characteristic = txCharacteristic ?: return
+
+        if (isWriting || pendingChunks.isEmpty() || !hasBluetoothConnectPermission()) {
+            return
         }
 
+        val nextChunk = pendingChunks.removeFirst()
+        val writeType = if (characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0) {
+            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        } else {
+            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        }
+        val waitsForCallback = writeType != BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+
+        isWriting = true
+
+        val accepted = writeCharacteristicCompat(currentGatt, characteristic, nextChunk, writeType)
+
         if (!accepted) {
-            writeInProgress = false
-            onError("GATT write was not accepted by Android")
-        } else if (writeType == BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE) {
-            writeInProgress = false
+            isWriting = false
+            pendingChunks.addFirst(nextChunk)
+            onError("BLE write was rejected")
+        } else if (!waitsForCallback) {
+            isWriting = false
             drainQueue()
         }
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    private fun closeGatt() {
-        val currentGatt = gatt
-        gatt = null
-        txCharacteristic = null
-        synchronized(pendingChunks) { pendingChunks.clear() }
-        writeInProgress = false
-        connectionState = BluetoothProfile.STATE_DISCONNECTED
-
-        if (hasConnectPermission()) {
-            currentGatt?.close()
+    @SuppressLint("MissingPermission")
+    private fun writeCharacteristicCompat(
+        gatt: BluetoothGatt,
+        characteristic: BluetoothGattCharacteristic,
+        value: ByteArray,
+        writeType: Int
+    ): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            gatt.writeCharacteristic(characteristic, value, writeType) == BluetoothStatusCodes.SUCCESS
+        } else {
+            characteristic.writeType = writeType
+            @Suppress("DEPRECATION")
+            characteristic.value = value
+            @Suppress("DEPRECATION")
+            gatt.writeCharacteristic(characteristic)
         }
     }
 
-    private fun hasConnectPermission(): Boolean {
+    private fun handleIncomingBytes(bytes: ByteArray) {
+        bytes.forEach { byte ->
+            when (val char = byte.toInt().toChar()) {
+                '\r' -> Unit
+                '\n' -> {
+                    val line = rxLineBuilder.toString().trim()
+                    rxLineBuilder.clear()
+                    handleIncomingLine(line)
+                }
+                else -> {
+                    if (rxLineBuilder.length < MAX_RX_LINE_LENGTH) {
+                        rxLineBuilder.append(char)
+                    } else {
+                        rxLineBuilder.clear()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleIncomingLine(line: String) {
+        if (line == TrailHudPacket.STM32_PING_PACKET) {
+            writeLine(TrailHudPacket.PHONE_PING_REPLY_PACKET)
+        }
+    }
+
+    private fun hasBluetoothConnectPermission(): Boolean {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-                ActivityCompat.checkSelfPermission(
+                ContextCompat.checkSelfPermission(
                     context,
                     Manifest.permission.BLUETOOTH_CONNECT
                 ) == PackageManager.PERMISSION_GRANTED
     }
 
-    private companion object {
-        const val MAX_HM10_CHUNK_BYTES = 20
+    companion object {
+        private val HM10_SERVICE_UUID: UUID =
+            UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb")
+        private val HM10_CHARACTERISTIC_UUID: UUID =
+            UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb")
+        private val CLIENT_CHARACTERISTIC_CONFIG_UUID: UUID =
+            UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+        private const val BLE_UART_CHUNK_SIZE = 20
+        private const val MAX_RX_LINE_LENGTH = 220
     }
 }

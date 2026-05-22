@@ -18,60 +18,34 @@ data class PhoneRotationPayload(
 
 object TrailHudPacket {
     const val DEFAULT_UPDATE_RATE_SECONDS = 1L
-    const val DEFAULT_UPDATE_RATE_MS = DEFAULT_UPDATE_RATE_SECONDS * 1000L
+    const val STM32_PING_PACKET = "trailhud:ping"
+    const val PHONE_PING_REPLY_PACKET = "trailhud:pong"
 
-    /**
-     * Newline-framed phone pose packet sent through the HM-10 UART bridge.
-     *
-     * Format:
-     *   [<lat>,<lon>,<alt-m>,<hacc-m>;<qw>,<qx>,<qy>,<qz>]
-     *
-     * Example:
-     *   [11.2233440,55.6677880,na,1.23;0.909090,0.090909,-0.001122,0.001122]
-     *
-     * Missing values are encoded as "na" so the field positions stay stable.
-     * Future extensions should be added as separate encoder functions rather
-     * than changing this base pose frame.
-     */
     fun encodePhonePose(
         location: PhoneLocationPayload?,
         rotation: PhoneRotationPayload?
     ): String {
-        return "[${encodeLocation(location)};${encodeRotation(rotation)}]"
-    }
+        val latitude = location?.latitude ?: 0.0
+        val longitude = location?.longitude ?: 0.0
+        val altitude = location?.altitudeMeters ?: 0.0
+        val horizontalAccuracy = location?.horizontalAccuracyMeters?.toDouble() ?: 0.0
 
-    private fun encodeLocation(location: PhoneLocationPayload?): String {
-        if (location == null) {
-            return listOf("na", "na", "na", "na").joinToString(",")
-        }
+        val qw = rotation?.qw ?: 1.0f
+        val qx = rotation?.qx ?: 0.0f
+        val qy = rotation?.qy ?: 0.0f
+        val qz = rotation?.qz ?: 0.0f
 
-        val altitude = location.altitudeMeters?.let { formatDouble(it, 2) } ?: "na"
-        val accuracy = location.horizontalAccuracyMeters?.let { formatFloat(it, 2) } ?: "na"
-
-        return listOf(
-            formatDouble(location.latitude, 7),
-            formatDouble(location.longitude, 7),
+        return String.format(
+            Locale.US,
+            "[%.6f,%.6f,%.2f,%.2f;%.5f,%.5f,%.5f,%.5f]",
+            latitude,
+            longitude,
             altitude,
-            accuracy
-        ).joinToString(",")
+            horizontalAccuracy,
+            qw,
+            qx,
+            qy,
+            qz
+        )
     }
-
-    private fun encodeRotation(rotation: PhoneRotationPayload?): String {
-        if (rotation == null) {
-            return listOf("na", "na", "na", "na").joinToString(",")
-        }
-
-        return listOf(
-            formatFloat(rotation.qw, 6),
-            formatFloat(rotation.qx, 6),
-            formatFloat(rotation.qy, 6),
-            formatFloat(rotation.qz, 6)
-        ).joinToString(",")
-    }
-
-    private fun formatDouble(value: Double, decimals: Int): String =
-        String.format(Locale.US, "%.${decimals}f", value)
-
-    private fun formatFloat(value: Float, decimals: Int): String =
-        String.format(Locale.US, "%.${decimals}f", value)
 }

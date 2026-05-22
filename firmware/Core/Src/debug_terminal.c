@@ -1,8 +1,8 @@
 #include "debug_terminal.h"
 
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define DEBUG_TERMINAL_PRINT_SIZE 220U
 
@@ -13,7 +13,12 @@ void DebugTerminal_PrintLine(UART_HandleTypeDef* huart, const char* text);
 void DebugTerminal_PrintMode(UART_HandleTypeDef* huart, DebugTerminalMode mode);
 void DebugTerminal_PrintBlePacket(UART_HandleTypeDef* huart, const char* packet);
 void DebugTerminal_HandleInput(UART_HandleTypeDef* huart, DebugTerminalMode* mode);
-void DebugTerminal_HandleBleRxByte(UART_HandleTypeDef* debug_uart, uint8_t rx_byte, char* rx_line, uint16_t* rx_len, uint16_t rx_line_size, DebugTerminalMode mode);
+uint8_t DebugTerminal_HandleBleRxByte(UART_HandleTypeDef* debug_uart,
+                                      uint8_t rx_byte,
+                                      char* rx_line,
+                                      uint16_t* rx_len,
+                                      uint16_t rx_line_size,
+                                      DebugTerminalMode mode);
 
 static char debug_print[DEBUG_TERMINAL_PRINT_SIZE];
 
@@ -80,7 +85,6 @@ static void DebugTerminal_FormatFixed(char* out,
     }
 
     scale = DebugTerminal_Pow10(decimals);
-
     scaled_value = (uint64_t)((abs_value * (double)scale) + 0.5);
     whole = (uint32_t)(scaled_value / scale);
     frac = (uint32_t)(scaled_value % scale);
@@ -178,7 +182,6 @@ static uint8_t DebugTerminal_ParsePhonePacket(const char* packet,
     }
 
     memset(out, 0, sizeof(*out));
-
     cursor = packet;
 
     if (!DebugTerminal_ConsumeChar(&cursor, '[')) return 0U;
@@ -191,14 +194,12 @@ static uint8_t DebugTerminal_ParsePhonePacket(const char* packet,
     if (DebugTerminal_ConsumeChar(&cursor, ','))
     {
         out->has_hacc = 1U;
-
         if (!DebugTerminal_ReadDouble(&cursor, &out->hacc_m)) return 0U;
         if (!DebugTerminal_ConsumeChar(&cursor, ';')) return 0U;
     }
     else
     {
         out->has_hacc = 0U;
-
         if (!DebugTerminal_ConsumeChar(&cursor, ';')) return 0U;
     }
 
@@ -219,7 +220,6 @@ static void DebugTerminal_PrintFormattedPhonePacket(UART_HandleTypeDef* huart,
 {
     int len;
     uint16_t tx_len;
-
     char lat[20];
     char lon[20];
     char alt[16];
@@ -234,13 +234,13 @@ static void DebugTerminal_PrintFormattedPhonePacket(UART_HandleTypeDef* huart,
         return;
     }
 
-    DebugTerminal_FormatFixed(lat,  sizeof(lat),  packet->lat_deg, 6U, 12U);
-    DebugTerminal_FormatFixed(lon,  sizeof(lon),  packet->lon_deg, 6U, 12U);
-    DebugTerminal_FormatFixed(alt,  sizeof(alt),  packet->alt_m,   2U, 9U);
-    DebugTerminal_FormatFixed(qw,   sizeof(qw),   packet->qw,      5U, 9U);
-    DebugTerminal_FormatFixed(qx,   sizeof(qx),   packet->qx,      5U, 9U);
-    DebugTerminal_FormatFixed(qy,   sizeof(qy),   packet->qy,      5U, 9U);
-    DebugTerminal_FormatFixed(qz,   sizeof(qz),   packet->qz,      5U, 9U);
+    DebugTerminal_FormatFixed(lat, sizeof(lat), packet->lat_deg, 6U, 12U);
+    DebugTerminal_FormatFixed(lon, sizeof(lon), packet->lon_deg, 6U, 12U);
+    DebugTerminal_FormatFixed(alt, sizeof(alt), packet->alt_m, 2U, 9U);
+    DebugTerminal_FormatFixed(qw, sizeof(qw), packet->qw, 5U, 9U);
+    DebugTerminal_FormatFixed(qx, sizeof(qx), packet->qx, 5U, 9U);
+    DebugTerminal_FormatFixed(qy, sizeof(qy), packet->qy, 5U, 9U);
+    DebugTerminal_FormatFixed(qz, sizeof(qz), packet->qz, 5U, 9U);
 
     if (packet->has_hacc != 0U)
     {
@@ -293,21 +293,21 @@ void DebugTerminal_PrintTitle(UART_HandleTypeDef* huart)
     static const char boot[] =
         "\r\n"
         "+===========================================================+\r\n"
-        "| TRAIL-HUD STM32 DEBUG TERMINAL                            |\r\n"
+        "| TRAIL-HUD STM32 DEBUG TERMINAL                           |\r\n"
         "+===========================================================+\r\n"
-        "| Board : STM32H750B-DK                                     |\r\n"
-        "| BLE   : HM-10 / AT-09 on USART1                           |\r\n"
-        "| Debug : USART3 / ST-LINK VCP / PuTTY / 9600 8N1           |\r\n"
+        "| Board : STM32H750B-DK                                    |\r\n"
+        "| BLE   : HM-10 / AT-09 on USART1                          |\r\n"
+        "| Debug : USART3 / ST-LINK VCP / PuTTY / 9600 8N1          |\r\n"
         "+-----------------------------------------------------------+\r\n"
-        "| Default mode : WAITING                                    |\r\n"
-        "| Press 'm'    : cycle WAITING -> PINGS -> PHONE DATA       |\r\n"
-        "| Press 'w'    : WAITING                                    |\r\n"
-        "| Press 'p'    : PINGS                                      |\r\n"
-        "| Press 'd'    : PHONE DATA                                 |\r\n"
+        "| Default mode : WAITING                                   |\r\n"
+        "| Press 'm' : cycle WAITING -> PINGS -> PHONE DATA         |\r\n"
+        "| Press 'w' : WAITING                                      |\r\n"
+        "| Press 'p' : PINGS                                        |\r\n"
+        "| Press 'd' : PHONE DATA                                   |\r\n"
         "+-----------------------------------------------------------+\r\n"
-        "| WAITING    : no periodic debug output                     |\r\n"
-        "| PINGS      : show STM32 -> HM-10 ping activity            |\r\n"
-        "| PHONE DATA : show formatted phone packets                 |\r\n"
+        "| WAITING    : no periodic debug output                    |\r\n"
+        "| PINGS      : send 4 BLE pings and wait for phone replies |\r\n"
+        "| PHONE DATA : show formatted phone packets                |\r\n"
         "+===========================================================+\r\n"
         "\r\n";
 
@@ -316,10 +316,7 @@ void DebugTerminal_PrintTitle(UART_HandleTypeDef* huart)
         return;
     }
 
-    HAL_UART_Transmit(huart,
-                      (uint8_t*)boot,
-                      (uint16_t)(sizeof(boot) - 1U),
-                      2000U);
+    HAL_UART_Transmit(huart, (uint8_t*)boot, (uint16_t)(sizeof(boot) - 1U), 2000U);
 }
 
 const char* DebugTerminal_ModeName(DebugTerminalMode mode)
@@ -328,13 +325,10 @@ const char* DebugTerminal_ModeName(DebugTerminalMode mode)
     {
     case DEBUG_TERMINAL_MODE_WAITING:
         return "WAITING";
-
     case DEBUG_TERMINAL_MODE_PINGS:
         return "PINGS";
-
     case DEBUG_TERMINAL_MODE_PHONE_DATA:
         return "PHONE DATA";
-
     default:
         return "UNKNOWN";
     }
@@ -350,21 +344,15 @@ void DebugTerminal_PrintLine(UART_HandleTypeDef* huart, const char* text)
         return;
     }
 
-    len = snprintf(debug_print,
-                   sizeof(debug_print),
-                   "> %s\r\n",
-                   (text != NULL) ? text : "(null)");
-
+    len = snprintf(debug_print, sizeof(debug_print), "> %s\r\n", (text != NULL) ? text : "(null)");
     tx_len = DebugTerminal_ClampLength(len, sizeof(debug_print));
+
     if (tx_len == 0U)
     {
         return;
     }
 
-    HAL_UART_Transmit(huart,
-                      (uint8_t*)debug_print,
-                      tx_len,
-                      1000U);
+    HAL_UART_Transmit(huart, (uint8_t*)debug_print, tx_len, 1000U);
 }
 
 void DebugTerminal_PrintMode(UART_HandleTypeDef* huart, DebugTerminalMode mode)
@@ -377,21 +365,15 @@ void DebugTerminal_PrintMode(UART_HandleTypeDef* huart, DebugTerminalMode mode)
         return;
     }
 
-    len = snprintf(debug_print,
-                   sizeof(debug_print),
-                   "> DEBUG MODE: %s\r\n",
-                   DebugTerminal_ModeName(mode));
-
+    len = snprintf(debug_print, sizeof(debug_print), "> DEBUG MODE: %s\r\n", DebugTerminal_ModeName(mode));
     tx_len = DebugTerminal_ClampLength(len, sizeof(debug_print));
+
     if (tx_len == 0U)
     {
         return;
     }
 
-    HAL_UART_Transmit(huart,
-                      (uint8_t*)debug_print,
-                      tx_len,
-                      1000U);
+    HAL_UART_Transmit(huart, (uint8_t*)debug_print, tx_len, 1000U);
 }
 
 void DebugTerminal_PrintBlePacket(UART_HandleTypeDef* huart, const char* packet)
@@ -418,8 +400,7 @@ void DebugTerminal_PrintBlePacket(UART_HandleTypeDef* huart, const char* packet)
     }
 }
 
-void DebugTerminal_HandleInput(UART_HandleTypeDef* huart,
-                               DebugTerminalMode* mode)
+void DebugTerminal_HandleInput(UART_HandleTypeDef* huart, DebugTerminalMode* mode)
 {
     uint8_t rx_byte = 0U;
 
@@ -437,11 +418,9 @@ void DebugTerminal_HandleInput(UART_HandleTypeDef* huart,
             case DEBUG_TERMINAL_MODE_WAITING:
                 *mode = DEBUG_TERMINAL_MODE_PINGS;
                 break;
-
             case DEBUG_TERMINAL_MODE_PINGS:
                 *mode = DEBUG_TERMINAL_MODE_PHONE_DATA;
                 break;
-
             case DEBUG_TERMINAL_MODE_PHONE_DATA:
             default:
                 *mode = DEBUG_TERMINAL_MODE_WAITING;
@@ -468,38 +447,44 @@ void DebugTerminal_HandleInput(UART_HandleTypeDef* huart,
     }
 }
 
-void DebugTerminal_HandleBleRxByte(UART_HandleTypeDef* debug_uart,
-                                   uint8_t rx_byte,
-                                   char* rx_line,
-                                   uint16_t* rx_len,
-                                   uint16_t rx_line_size,
-                                   DebugTerminalMode mode)
+uint8_t DebugTerminal_HandleBleRxByte(UART_HandleTypeDef* debug_uart,
+                                      uint8_t rx_byte,
+                                      char* rx_line,
+                                      uint16_t* rx_len,
+                                      uint16_t rx_line_size,
+                                      DebugTerminalMode mode)
 {
-    if ((debug_uart == NULL) ||
-        (rx_line == NULL) ||
-        (rx_len == NULL) ||
-        (rx_line_size == 0U))
+    uint8_t is_ping_reply = 0U;
+
+    if ((debug_uart == NULL) || (rx_line == NULL) || (rx_len == NULL) || (rx_line_size == 0U))
     {
-        return;
+        return 0U;
     }
 
     if (rx_byte == '\r')
     {
-        return;
+        return 0U;
     }
 
     if (rx_byte == '\n')
     {
         rx_line[*rx_len] = '\0';
 
-        if ((*rx_len > 0U) && (mode == DEBUG_TERMINAL_MODE_PHONE_DATA))
+        if (*rx_len > 0U)
         {
-            DebugTerminal_PrintBlePacket(debug_uart, rx_line);
+            if (strcmp(rx_line, DEBUG_TERMINAL_PING_REPLY) == 0)
+            {
+                is_ping_reply = 1U;
+            }
+            else if (mode == DEBUG_TERMINAL_MODE_PHONE_DATA)
+            {
+                DebugTerminal_PrintBlePacket(debug_uart, rx_line);
+            }
         }
 
         *rx_len = 0U;
         rx_line[0] = '\0';
-        return;
+        return is_ping_reply;
     }
 
     if (*rx_len < (uint16_t)(rx_line_size - 1U))
@@ -517,4 +502,6 @@ void DebugTerminal_HandleBleRxByte(UART_HandleTypeDef* debug_uart,
             DebugTerminal_PrintLine(debug_uart, "BLE <- PHONE: RX line overflow, dropped partial packet");
         }
     }
+
+    return 0U;
 }
