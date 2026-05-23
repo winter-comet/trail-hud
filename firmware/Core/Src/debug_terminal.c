@@ -323,7 +323,7 @@ static void DebugTerminal_PrintFormattedPhonePacket(UART_HandleTypeDef* huart,
 
     len = snprintf(debug_print,
                    sizeof(debug_print),
-                   "> PHONE | lat:%s | lon:%s | alt:%s m | hacc:%s m | q:%s %s %s %s\r\n",
+                   "> HM-10: lat:%s | lon:%s | alt:%s m | hacc:%s m | qw:%s qx:%s qy:%s qz:%s\r\n",
                    lat,
                    lon,
                    alt,

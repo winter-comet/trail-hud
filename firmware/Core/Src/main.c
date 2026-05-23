@@ -126,6 +126,7 @@
 /* USER CODE BEGIN Includes */
 #include "hm10.h"
 #include "debug_terminal.h"
+#include "mpu6050.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -142,6 +143,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+I2C_HandleTypeDef hi2c4;
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart3;
 
@@ -152,9 +154,9 @@ const osThreadAttr_t defaultTask_attributes = {
     .stack_size = 1024 * 4,
     .priority = (osPriority_t)osPriorityNormal,
 };
-
 /* USER CODE BEGIN PV */
 static HM10_HandleTypeDef hm10;
+static MPU6050_HandleTypeDef mpu6050;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -163,7 +165,8 @@ static void MPU_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USART1_UART_Init(void);
-void StartDebugTask(void* argument);
+static void MX_I2C4_Init(void);
+void StartDefaultTask(void* argument);
 
 /* USER CODE BEGIN PFP */
 static uint8_t DebugTask_ReadBleRx(DebugTerminalMode mode,
@@ -244,7 +247,7 @@ static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode,
     *ble_rx_len = 0U;
     ble_rx_line[0] = '\0';
 
-    DebugTerminal_PrintLine(&huart3, "BLE: pinging phone with 4 packets of data");
+    DebugTerminal_PrintLine(&huart3, "HM-10: pinging phone with 4 packets of data");
 
     for (ping_index = 0U; ping_index < DEBUG_TERMINAL_PING_COUNT; ping_index++)
     {
@@ -263,8 +266,8 @@ static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode,
 
         DebugTerminal_PrintLine(&huart3,
                                 (reply_received != 0U)
-                                    ? "BLE: reply from phone"
-                                    : "BLE: no reply");
+                                    ? "HM-10: reply from phone"
+                                    : "HM-10: no reply");
     }
 
     *debug_mode = DEBUG_TERMINAL_MODE_WAITING;
@@ -286,6 +289,8 @@ int main(void)
     MPU_Config();
 
     /* MCU Configuration--------------------------------------------------------*/
+
+    /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
     HAL_Init();
 
     /* USER CODE BEGIN Init */
@@ -301,14 +306,20 @@ int main(void)
     MX_GPIO_Init();
     MX_USART3_UART_Init();
     MX_USART1_UART_Init();
-
+    MX_I2C4_Init();
     /* USER CODE BEGIN 2 */
     if (HM10_Init(&hm10, &huart1) != HM10_OK)
     {
         Error_Handler();
     }
-
     HM10_SetNameAndReset(&hm10, "Trail-Module", 1000U);
+    DebugTerminal_PrintLine(&huart3, "HM-10: Initialized");
+
+    if (MPU6050_Init(&mpu6050, &hi2c4, MPU6050_DEFAULT_I2C_ADDRESS) != MPU6050_OK)
+    {
+        Error_Handler();
+    }
+    DebugTerminal_PrintLine(&huart3, "MPU-6050: Initialized");
     /* USER CODE END 2 */
 
     /* Init scheduler */
@@ -331,7 +342,8 @@ int main(void)
     /* USER CODE END RTOS_QUEUES */
 
     /* Create the thread(s) */
-    defaultTaskHandle = osThreadNew(StartDebugTask, NULL, &defaultTask_attributes);
+    /* creation of defaultTask */
+    defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
     /* USER CODE BEGIN RTOS_THREADS */
     /* add threads, ... */
@@ -345,9 +357,16 @@ int main(void)
     osKernelStart();
 
     /* We should never get here as control is now taken by the scheduler */
+
+    /* Infinite loop */
+    /* USER CODE BEGIN WHILE */
     while (1)
     {
+        /* USER CODE END WHILE */
+
+        /* USER CODE BEGIN 3 */
     }
+    /* USER CODE END 3 */
 }
 
 /**
@@ -359,10 +378,12 @@ void SystemClock_Config(void)
     RCC_OscInitTypeDef RCC_OscInitStruct = {0};
     RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-    /** Supply configuration update enable */
+    /** Supply configuration update enable
+    */
     HAL_PWREx_ConfigSupply(PWR_LDO_SUPPLY);
 
-    /** Configure the main internal regulator output voltage */
+    /** Configure the main internal regulator output voltage
+    */
     __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
 
     while (!__HAL_PWR_GET_FLAG(PWR_FLAG_VOSRDY))
@@ -370,8 +391,8 @@ void SystemClock_Config(void)
     }
 
     /** Initializes the RCC Oscillators according to the specified parameters
-      * in the RCC_OscInitTypeDef structure.
-      */
+    * in the RCC_OscInitTypeDef structure.
+    */
     RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
     RCC_OscInitStruct.HSIState = RCC_HSI_DIV1;
     RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
@@ -381,22 +402,69 @@ void SystemClock_Config(void)
         Error_Handler();
     }
 
-    /** Initializes the CPU, AHB and APB buses clocks */
-    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK |
-        RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2 |
-        RCC_CLOCKTYPE_D3PCLK1 | RCC_CLOCKTYPE_D1PCLK1;
+    /** Initializes the CPU, AHB and APB buses clocks
+    */
+    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
+        | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2
+        | RCC_CLOCKTYPE_D3PCLK1 | RCC_CLOCKTYPE_D1PCLK1;
     RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
     RCC_ClkInitStruct.SYSCLKDivider = RCC_SYSCLK_DIV1;
     RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV1;
     RCC_ClkInitStruct.APB3CLKDivider = RCC_APB3_DIV1;
     RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV2;
-    RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV1;
-    RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV1;
+    RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV2;
+    RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV2;
 
     if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
     {
         Error_Handler();
     }
+}
+
+/**
+  * @brief I2C4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C4_Init(void)
+{
+    /* USER CODE BEGIN I2C4_Init 0 */
+
+    /* USER CODE END I2C4_Init 0 */
+
+    /* USER CODE BEGIN I2C4_Init 1 */
+
+    /* USER CODE END I2C4_Init 1 */
+    hi2c4.Instance = I2C4;
+    hi2c4.Init.Timing = 0x00707CBB;
+    hi2c4.Init.OwnAddress1 = 0;
+    hi2c4.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    hi2c4.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    hi2c4.Init.OwnAddress2 = 0;
+    hi2c4.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+    hi2c4.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c4.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+    if (HAL_I2C_Init(&hi2c4) != HAL_OK)
+    {
+        Error_Handler();
+    }
+
+    /** Configure Analogue filter
+    */
+    if (HAL_I2CEx_ConfigAnalogFilter(&hi2c4, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
+    {
+        Error_Handler();
+    }
+
+    /** Configure Digital filter
+    */
+    if (HAL_I2CEx_ConfigDigitalFilter(&hi2c4, 0) != HAL_OK)
+    {
+        Error_Handler();
+    }
+    /* USER CODE BEGIN I2C4_Init 2 */
+
+    /* USER CODE END I2C4_Init 2 */
 }
 
 /**
@@ -411,7 +479,6 @@ static void MX_USART1_UART_Init(void)
 
     /* USER CODE BEGIN USART1_Init 1 */
     /* USER CODE END USART1_Init 1 */
-
     huart1.Instance = USART1;
     huart1.Init.BaudRate = 9600;
     huart1.Init.WordLength = UART_WORDLENGTH_8B;
@@ -423,7 +490,6 @@ static void MX_USART1_UART_Init(void)
     huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
     huart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
     huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-
     if (HAL_UART_Init(&huart1) != HAL_OK)
     {
         Error_Handler();
@@ -440,7 +506,6 @@ static void MX_USART1_UART_Init(void)
     {
         Error_Handler();
     }
-
     /* USER CODE BEGIN USART1_Init 2 */
     /* USER CODE END USART1_Init 2 */
 }
@@ -457,7 +522,6 @@ static void MX_USART3_UART_Init(void)
 
     /* USER CODE BEGIN USART3_Init 1 */
     /* USER CODE END USART3_Init 1 */
-
     huart3.Instance = USART3;
     huart3.Init.BaudRate = 9600;
     huart3.Init.WordLength = UART_WORDLENGTH_8B;
@@ -469,7 +533,6 @@ static void MX_USART3_UART_Init(void)
     huart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
     huart3.Init.ClockPrescaler = UART_PRESCALER_DIV1;
     huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-
     if (HAL_UART_Init(&huart3) != HAL_OK)
     {
         Error_Handler();
@@ -486,7 +549,6 @@ static void MX_USART3_UART_Init(void)
     {
         Error_Handler();
     }
-
     /* USER CODE BEGIN USART3_Init 2 */
     /* USER CODE END USART3_Init 2 */
 }
@@ -499,7 +561,6 @@ static void MX_USART3_UART_Init(void)
 static void MX_GPIO_Init(void)
 {
     GPIO_InitTypeDef GPIO_InitStruct = {0};
-
     /* USER CODE BEGIN MX_GPIO_Init_1 */
     /* USER CODE END MX_GPIO_Init_1 */
 
@@ -507,6 +568,7 @@ static void MX_GPIO_Init(void)
     __HAL_RCC_GPIOG_CLK_ENABLE();
     __HAL_RCC_GPIOK_CLK_ENABLE();
     __HAL_RCC_GPIOB_CLK_ENABLE();
+    __HAL_RCC_GPIOD_CLK_ENABLE();
 
     /*Configure GPIO pin Output Level */
     HAL_GPIO_WritePin(HM10_EN_GPIO_Port, HM10_EN_Pin, GPIO_PIN_SET);
@@ -538,7 +600,7 @@ static void MX_GPIO_Init(void)
   * @retval None
   */
 /* USER CODE END Header_StartDefaultTask */
-void StartDebugTask(void* argument)
+void StartDefaultTask(void* argument)
 {
     /* USER CODE BEGIN 5 */
     char ble_rx_line[BLE_RX_LINE_SIZE] = {0};
@@ -554,8 +616,8 @@ void StartDebugTask(void* argument)
     last_state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
     DebugTerminal_PrintLine(&huart3,
                             (last_state == GPIO_PIN_SET)
-                                ? "HM10 STATE: CONNECTED"
-                                : "HM10 STATE: DISCONNECTED");
+                                ? "HM-10: CONNECTED"
+                                : "HM-10: DISCONNECTED");
 
     for (;;)
     {
@@ -580,8 +642,8 @@ void StartDebugTask(void* argument)
             last_state = state;
             DebugTerminal_PrintLine(&huart3,
                                     (state == GPIO_PIN_SET)
-                                        ? "HM10 STATE: CONNECTED"
-                                        : "HM10 STATE: DISCONNECTED");
+                                        ? "HM-10: CONNECTED"
+                                        : "HM-10: DISCONNECTED");
         }
 
         (void)DebugTask_ReadBleRx(debug_mode,
@@ -595,6 +657,7 @@ void StartDebugTask(void* argument)
 }
 
 /* MPU Configuration */
+
 void MPU_Config(void)
 {
     MPU_Region_InitTypeDef MPU_InitStruct = {0};

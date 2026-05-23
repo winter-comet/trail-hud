@@ -9,8 +9,8 @@ extern "C" {
 #include "stm32h7xx_hal.h"
 #include <stdint.h>
 
-#define HM10_DEFAULT_TIMEOUT_MS            100U
-#define HM10_DEFAULT_INTER_BYTE_TIMEOUT_MS   5U
+#define HM10_DEFAULT_TIMEOUT_MS 100U
+#define HM10_DEFAULT_INTER_BYTE_TIMEOUT_MS 5U
 
 /**
  * @brief Lists all status values returned by the HM-10 helper library.

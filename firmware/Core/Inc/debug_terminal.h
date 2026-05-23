@@ -8,10 +8,10 @@ extern "C" {
 #include "stm32h7xx_hal.h"
 #include <stdint.h>
 
-#define DEBUG_TERMINAL_PING_COUNT      4U
+#define DEBUG_TERMINAL_PING_COUNT 4U
 #define DEBUG_TERMINAL_PING_TIMEOUT_MS 1000U
-#define DEBUG_TERMINAL_PING_PACKET     "trailhud:ping"
-#define DEBUG_TERMINAL_PING_REPLY      "trailhud:pong"
+#define DEBUG_TERMINAL_PING_PACKET "trailhud:ping"
+#define DEBUG_TERMINAL_PING_REPLY "trailhud:pong"
 
 /**
  * @brief Lists the debug terminal display modes controlled from PuTTY input.

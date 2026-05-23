@@ -45,6 +45,7 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         Core/Src/hm10.c
+        Core/Src/mpu6050.c
         Core/Src/debug_terminal.c
 )
 
