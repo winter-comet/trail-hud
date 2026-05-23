@@ -22,6 +22,18 @@ uint8_t DebugTerminal_HandleBleRxByte(UART_HandleTypeDef* debug_uart,
 
 static char debug_print[DEBUG_TERMINAL_PRINT_SIZE];
 
+/**
+ * @brief Stores one parsed phone data packet received over BLE.
+ *
+ * Fields:
+ * - lat_deg: Phone latitude in decimal degrees.
+ * - lon_deg: Phone longitude in decimal degrees.
+ * - alt_m: Phone altitude in meters.
+ * - hacc_m: Horizontal location accuracy in meters.
+ * - qw/qx/qy/qz: Phone orientation quaternion components.
+ * - has_hacc: Nonzero when hacc_m was present in the packet; zero when the
+ *   packet omitted horizontal accuracy.
+ */
 typedef struct
 {
     double lat_deg;
@@ -35,6 +47,12 @@ typedef struct
     uint8_t has_hacc;
 } DebugTerminalPhonePacket;
 
+/**
+ * @brief Calculates an unsigned integer power of ten.
+ * @param exponent Decimal exponent to apply; expected to be small enough that
+ *                 10^exponent fits in uint32_t.
+ * @return 10 raised to exponent as a uint32_t value.
+ */
 static uint32_t DebugTerminal_Pow10(uint8_t exponent)
 {
     uint32_t result = 1U;
@@ -48,6 +66,17 @@ static uint32_t DebugTerminal_Pow10(uint8_t exponent)
     return result;
 }
 
+/**
+ * @brief Formats a floating-point value as fixed-point text with optional left padding.
+ * @param out Destination character buffer; NULL is allowed and causes no output.
+ * @param out_size Size of out in bytes, including the null terminator; 0 is
+ *                 allowed and causes no output.
+ * @param value Floating-point value to format.
+ * @param decimals Number of digits to print after the decimal point.
+ * @param width Minimum output width in characters; shorter values are padded
+ *              with leading spaces.
+ * @return Nothing.
+ */
 static void DebugTerminal_FormatFixed(char* out,
                                       size_t out_size,
                                       double value,
@@ -119,6 +148,11 @@ static void DebugTerminal_FormatFixed(char* out,
     out[out_index] = '\0';
 }
 
+/**
+ * @brief Advances a string pointer past spaces and tab characters.
+ * @param text Pointer to a null-terminated string; NULL is not allowed.
+ * @return Pointer to the first non-space, non-tab character in text.
+ */
 static const char* DebugTerminal_SkipSpaces(const char* text)
 {
     while ((*text == ' ') || (*text == '\t'))
@@ -129,6 +163,14 @@ static const char* DebugTerminal_SkipSpaces(const char* text)
     return text;
 }
 
+/**
+ * @brief Consumes one expected character from a parsed text cursor.
+ * @param cursor Pointer to the current parse cursor; cursor and *cursor must not
+ *               be NULL and are advanced on success.
+ * @param expected Character that must appear after optional spaces.
+ * @return 1 when the expected character is found and consumed, or 0 when the
+ *         cursor is invalid or the expected character is not present.
+ */
 static uint8_t DebugTerminal_ConsumeChar(const char** cursor, char expected)
 {
     const char* p;
@@ -149,6 +191,15 @@ static uint8_t DebugTerminal_ConsumeChar(const char** cursor, char expected)
     return 1U;
 }
 
+/**
+ * @brief Reads one floating-point value from a parsed text cursor.
+ * @param cursor Pointer to the current parse cursor; cursor and *cursor must not
+ *               be NULL and are advanced on success.
+ * @param value Output pointer that receives the parsed double; NULL is not
+ *              allowed.
+ * @return 1 when a double value is parsed successfully, or 0 when arguments are
+ *         invalid or no valid number is found.
+ */
 static uint8_t DebugTerminal_ReadDouble(const char** cursor, double* value)
 {
     char* end = NULL;
@@ -171,6 +222,16 @@ static uint8_t DebugTerminal_ReadDouble(const char** cursor, double* value)
     return 1U;
 }
 
+/**
+ * @brief Parses a BLE phone data packet into numeric location and rotation fields.
+ * @param packet Null-terminated packet string to parse; NULL is not allowed and
+ *               must match the expected phone packet format.
+ * @param out Output packet structure that receives parsed values; NULL is not
+ *            allowed and is cleared before parsing.
+ * @return 1 when the full packet is parsed successfully, or 0 when arguments
+ *         are invalid, the packet format is invalid, or extra non-space text
+ *         remains after the closing bracket.
+ */
 static uint8_t DebugTerminal_ParsePhonePacket(const char* packet,
                                               DebugTerminalPhonePacket* out)
 {
@@ -215,6 +276,15 @@ static uint8_t DebugTerminal_ParsePhonePacket(const char* packet,
     return (*DebugTerminal_SkipSpaces(cursor) == '\0') ? 1U : 0U;
 }
 
+
+/**
+ * @brief Prints a parsed phone data packet as one aligned debug-terminal line.
+ * @param huart STM32 HAL UART handle for the debug terminal; NULL is allowed
+ *              and causes no output.
+ * @param packet Parsed phone packet to print; NULL is allowed and causes no
+ *               output.
+ * @return Nothing.
+ */
 static void DebugTerminal_PrintFormattedPhonePacket(UART_HandleTypeDef* huart,
                                                     const DebugTerminalPhonePacket* packet)
 {
@@ -273,6 +343,15 @@ static void DebugTerminal_PrintFormattedPhonePacket(UART_HandleTypeDef* huart,
     HAL_UART_Transmit(huart, (uint8_t*)debug_print, tx_len, 1000U);
 }
 
+/**
+ * @brief Converts a snprintf-style length into a safe UART transmit length.
+ * @param len Length returned by snprintf; values less than or equal to 0 produce
+ *            a transmit length of 0.
+ * @param buffer_size Size of the source print buffer in bytes; must be greater
+ *                    than 0.
+ * @return 0 when len is not positive, buffer_size - 1 when len would exceed or
+ *         fill the buffer, otherwise len cast to uint16_t.
+ */
 static uint16_t DebugTerminal_ClampLength(int len, size_t buffer_size)
 {
     if (len <= 0)
@@ -288,26 +367,32 @@ static uint16_t DebugTerminal_ClampLength(int len, size_t buffer_size)
     return (uint16_t)len;
 }
 
+/**
+ * @brief Prints the startup banner and command overview for the debug terminal.
+ * @param huart STM32 HAL UART handle for the debug terminal; NULL is allowed
+ *              and causes no output.
+ * @return Nothing.
+ */
 void DebugTerminal_PrintTitle(UART_HandleTypeDef* huart)
 {
     static const char boot[] =
         "\r\n"
         "+===========================================================+\r\n"
-        "| TRAIL-HUD STM32 DEBUG TERMINAL                           |\r\n"
+        "| TRAIL-HUD STM32 DEBUG TERMINAL                            |\r\n"
         "+===========================================================+\r\n"
-        "| Board : STM32H750B-DK                                    |\r\n"
-        "| BLE   : HM-10 / AT-09 on USART1                          |\r\n"
-        "| Debug : USART3 / ST-LINK VCP / PuTTY / 9600 8N1          |\r\n"
+        "| Board : STM32H750B-DK                                     |\r\n"
+        "| BLE   : HM-10 / AT-09 on USART1                           |\r\n"
+        "| Debug : USART3 / ST-LINK VCP / PuTTY / 9600 8N1           |\r\n"
         "+-----------------------------------------------------------+\r\n"
-        "| Default mode : WAITING                                   |\r\n"
-        "| Press 'm' : cycle WAITING -> PINGS -> PHONE DATA         |\r\n"
-        "| Press 'w' : WAITING                                      |\r\n"
-        "| Press 'p' : PINGS                                        |\r\n"
-        "| Press 'd' : PHONE DATA                                   |\r\n"
+        "| Default mode : WAITING                                    |\r\n"
+        "| Press 'm' : cycle WAITING -> PINGS -> PHONE DATA          |\r\n"
+        "| Press 'w' : WAITING                                       |\r\n"
+        "| Press 'p' : PINGS                                         |\r\n"
+        "| Press 'd' : PHONE DATA                                    |\r\n"
         "+-----------------------------------------------------------+\r\n"
-        "| WAITING    : no periodic debug output                    |\r\n"
-        "| PINGS      : send 4 BLE pings and wait for phone replies |\r\n"
-        "| PHONE DATA : show formatted phone packets                |\r\n"
+        "| WAITING    : no periodic debug output                     |\r\n"
+        "| PINGS      : send 4 BLE pings and wait for phone replies  |\r\n"
+        "| PHONE DATA : show formatted phone packets                 |\r\n"
         "+===========================================================+\r\n"
         "\r\n";
 
@@ -319,6 +404,12 @@ void DebugTerminal_PrintTitle(UART_HandleTypeDef* huart)
     HAL_UART_Transmit(huart, (uint8_t*)boot, (uint16_t)(sizeof(boot) - 1U), 2000U);
 }
 
+/**
+ * @brief Converts a debug terminal mode value to a readable mode name.
+ * @param mode Debug terminal mode to convert.
+ * @return Pointer to a static string: "WAITING", "PINGS", "PHONE DATA", or
+ *         "UNKNOWN" for values outside DebugTerminalMode.
+ */
 const char* DebugTerminal_ModeName(DebugTerminalMode mode)
 {
     switch (mode)
@@ -334,6 +425,14 @@ const char* DebugTerminal_ModeName(DebugTerminalMode mode)
     }
 }
 
+/**
+ * @brief Prints one prefixed line to the debug terminal.
+ * @param huart STM32 HAL UART handle for the debug terminal; NULL is allowed
+ *              and causes no output.
+ * @param text Null-terminated text to print after the "> " prefix; NULL is
+ *             allowed and is printed as "(null)".
+ * @return Nothing.
+ */
 void DebugTerminal_PrintLine(UART_HandleTypeDef* huart, const char* text)
 {
     int len;
@@ -355,6 +454,13 @@ void DebugTerminal_PrintLine(UART_HandleTypeDef* huart, const char* text)
     HAL_UART_Transmit(huart, (uint8_t*)debug_print, tx_len, 1000U);
 }
 
+/**
+ * @brief Prints the currently selected debug terminal mode.
+ * @param huart STM32 HAL UART handle for the debug terminal; NULL is allowed
+ *              and causes no output.
+ * @param mode Debug terminal mode to print.
+ * @return Nothing.
+ */
 void DebugTerminal_PrintMode(UART_HandleTypeDef* huart, DebugTerminalMode mode)
 {
     int len;
@@ -376,6 +482,14 @@ void DebugTerminal_PrintMode(UART_HandleTypeDef* huart, DebugTerminalMode mode)
     HAL_UART_Transmit(huart, (uint8_t*)debug_print, tx_len, 1000U);
 }
 
+/**
+ * @brief Parses and prints one BLE phone packet when it matches the expected format.
+ * @param huart STM32 HAL UART handle for the debug terminal; NULL is allowed
+ *              and causes no output.
+ * @param packet Null-terminated BLE packet string; NULL, empty, and
+ *               unrecognized packets are ignored.
+ * @return Nothing.
+ */
 void DebugTerminal_PrintBlePacket(UART_HandleTypeDef* huart, const char* packet)
 {
     size_t packet_len;
@@ -400,6 +514,14 @@ void DebugTerminal_PrintBlePacket(UART_HandleTypeDef* huart, const char* packet)
     }
 }
 
+/**
+ * @brief Handles pending keyboard input from the debug terminal UART.
+ * @param huart STM32 HAL UART handle connected to the debug terminal; NULL is
+ *              allowed and causes no input handling.
+ * @param mode Pointer to the current debug terminal mode; NULL is allowed and
+ *             causes no input handling.
+ * @return Nothing.
+ */
 void DebugTerminal_HandleInput(UART_HandleTypeDef* huart, DebugTerminalMode* mode)
 {
     uint8_t rx_byte = 0U;
@@ -447,6 +569,21 @@ void DebugTerminal_HandleInput(UART_HandleTypeDef* huart, DebugTerminalMode* mod
     }
 }
 
+/**
+ * @brief Accumulates BLE RX bytes into newline-terminated packets for debug printing.
+ * @param debug_uart STM32 HAL UART handle for the debug terminal output; NULL
+ *                   is allowed and causes no processing.
+ * @param rx_byte Newly received byte from the BLE UART.
+ * @param rx_line Line buffer used to accumulate bytes until a newline; NULL is
+ *                allowed and causes no processing.
+ * @param rx_len Pointer to the current number of bytes stored in rx_line; NULL
+ *               is allowed and causes no processing.
+ * @param rx_line_size Size of rx_line in bytes, including space for the null
+ *                     terminator; 0 is allowed and causes no processing.
+ * @param mode Current debug terminal mode; packets are printed only in
+ *             DEBUG_TERMINAL_MODE_PHONE_DATA.
+ * @return Nothing.
+ */
 uint8_t DebugTerminal_HandleBleRxByte(UART_HandleTypeDef* debug_uart,
                                       uint8_t rx_byte,
                                       char* rx_line,
