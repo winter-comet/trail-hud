@@ -3,9 +3,11 @@
 
 #ifdef __cplusplus
 extern "C" {
+
 #endif
 
 #include "stm32h7xx_hal.h"
+#include "mpu6050.h"
 #include <stdint.h>
 
 #define DEBUG_TERMINAL_PING_COUNT 4U
@@ -21,12 +23,15 @@ extern "C" {
  * - DEBUG_TERMINAL_MODE_PINGS: Terminal displays ping-related BLE debug output.
  * - DEBUG_TERMINAL_MODE_PHONE_DATA: Terminal displays parsed phone data packets
  *   received over BLE.
+ * - DEBUG_TERMINAL_MODE_MPU6050_DATA: Terminal displays formatted MPU-6050
+ *   accelerometer and gyroscope packets.
  */
 typedef enum
 {
     DEBUG_TERMINAL_MODE_WAITING = 0,
     DEBUG_TERMINAL_MODE_PINGS,
-    DEBUG_TERMINAL_MODE_PHONE_DATA
+    DEBUG_TERMINAL_MODE_PHONE_DATA,
+    DEBUG_TERMINAL_MODE_MPU6050_DATA
 } DebugTerminalMode;
 
 /**
@@ -40,8 +45,8 @@ void DebugTerminal_PrintTitle(UART_HandleTypeDef* huart);
 /**
  * @brief Converts a debug terminal mode value to a readable mode name.
  * @param mode Debug terminal mode to convert.
- * @return Pointer to a static string: "WAITING", "PINGS", "PHONE DATA", or
- *         "UNKNOWN" for values outside DebugTerminalMode.
+ * @return Pointer to a static string: "WAITING", "PINGS", "PHONE DATA",
+ *         "MPU-6050 DATA", or "UNKNOWN" for values outside DebugTerminalMode.
  */
 const char* DebugTerminal_ModeName(DebugTerminalMode mode);
 
@@ -75,6 +80,18 @@ void DebugTerminal_PrintMode(UART_HandleTypeDef* huart, DebugTerminalMode mode);
 void DebugTerminal_PrintBlePacket(UART_HandleTypeDef* huart, const char* packet);
 
 /**
+ * @brief Prints one formatted MPU-6050 accelerometer and gyroscope packet.
+ * @param huart STM32 HAL UART handle for the debug terminal; NULL is allowed
+ *              and causes no output.
+ * @param packet MPU-6050 data packet to print; NULL is allowed and causes no
+ *               output. Accelerometer values are printed in g, gyroscope values
+ *               in degrees per second, and temperature in degrees Celsius.
+ * @return Nothing.
+ */
+void DebugTerminal_PrintMpu6050Packet(UART_HandleTypeDef* huart,
+                                      const MPU6050_DataPacket* packet);
+
+/**
  * @brief Handles pending keyboard input from the debug terminal UART.
  * @param huart STM32 HAL UART handle connected to the debug terminal; NULL is
  *              allowed and causes no input handling.
@@ -82,23 +99,23 @@ void DebugTerminal_PrintBlePacket(UART_HandleTypeDef* huart, const char* packet)
  *             causes no input handling.
  * @return Nothing.
  */
-void DebugTerminal_HandleInput(UART_HandleTypeDef* huart,
-                               DebugTerminalMode* mode);
+void DebugTerminal_HandleInput(UART_HandleTypeDef* huart, DebugTerminalMode* mode);
 
 /**
  * @brief Accumulates BLE RX bytes into newline-terminated packets for debug printing.
- * @param debug_uart STM32 HAL UART handle for the debug terminal output; NULL
- *                   is allowed and causes no processing.
- * @param rx_byte Newly received byte from the BLE UART.
- * @param rx_line Line buffer used to accumulate bytes until a newline; NULL is
- *                allowed and causes no processing.
+ * @param debug_uart STM32 HAL UART handle for debug output; NULL is allowed and
+ *                   causes no processing.
+ * @param rx_byte One byte received from the HM-10 UART bridge.
+ * @param rx_line Destination line buffer used to accumulate bytes until \n;
+ *                NULL is allowed and causes no processing.
  * @param rx_len Pointer to the current number of bytes stored in rx_line; NULL
  *               is allowed and causes no processing.
  * @param rx_line_size Size of rx_line in bytes, including space for the null
  *                     terminator; 0 is allowed and causes no processing.
- * @param mode Current debug terminal mode; packets are printed only in
+ * @param mode Current debug terminal mode; phone packets are printed only in
  *             DEBUG_TERMINAL_MODE_PHONE_DATA.
- * @return Nothing.
+ * @return 1 when the completed line matches DEBUG_TERMINAL_PING_REPLY, or 0
+ *         when no completed ping reply is detected.
  */
 uint8_t DebugTerminal_HandleBleRxByte(UART_HandleTypeDef* debug_uart,
                                       uint8_t rx_byte,

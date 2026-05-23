@@ -136,6 +136,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define BLE_RX_LINE_SIZE 220U
+#define MPU6050_DEBUG_UPDATE_PERIOD_MS 1000U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -181,6 +182,7 @@ static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode,
                                       char* ble_rx_line,
                                       uint16_t* ble_rx_len,
                                       uint16_t ble_rx_line_size);
+static void DebugTask_PrintMpu6050Data(uint32_t* last_tick);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -247,7 +249,7 @@ static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode,
     *ble_rx_len = 0U;
     ble_rx_line[0] = '\0';
 
-    DebugTerminal_PrintLine(&huart3, "HM-10: pinging phone with 4 packets of data");
+    DebugTerminal_PrintLine(&huart3, "BLE: pinging phone with 4 packets of data");
 
     for (ping_index = 0U; ping_index < DEBUG_TERMINAL_PING_COUNT; ping_index++)
     {
@@ -266,12 +268,41 @@ static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode,
 
         DebugTerminal_PrintLine(&huart3,
                                 (reply_received != 0U)
-                                    ? "HM-10: reply from phone"
-                                    : "HM-10: no reply");
+                                    ? "BLE: reply from phone"
+                                    : "BLE: no reply");
     }
 
     *debug_mode = DEBUG_TERMINAL_MODE_WAITING;
     DebugTerminal_PrintMode(&huart3, *debug_mode);
+}
+
+static void DebugTask_PrintMpu6050Data(uint32_t* last_tick)
+{
+    MPU6050_DataPacket packet;
+    MPU6050_StatusTypeDef status;
+
+    if (last_tick == NULL)
+    {
+        return;
+    }
+
+    if ((HAL_GetTick() - *last_tick) < MPU6050_DEBUG_UPDATE_PERIOD_MS)
+    {
+        return;
+    }
+
+    status = MPU6050_ReadDataPacket(&mpu6050, &packet);
+
+    if (status == MPU6050_OK)
+    {
+        DebugTerminal_PrintMpu6050Packet(&huart3, &packet);
+    }
+    else
+    {
+        DebugTerminal_PrintLine(&huart3, "MPU-6050: read failed");
+    }
+
+    *last_tick = HAL_GetTick();
 }
 
 /* USER CODE END 0 */
@@ -312,14 +343,13 @@ int main(void)
     {
         Error_Handler();
     }
+
     HM10_SetNameAndReset(&hm10, "Trail-Module", 1000U);
-    DebugTerminal_PrintLine(&huart3, "HM-10: Initialized");
 
     if (MPU6050_Init(&mpu6050, &hi2c4, MPU6050_DEFAULT_I2C_ADDRESS) != MPU6050_OK)
     {
         Error_Handler();
     }
-    DebugTerminal_PrintLine(&huart3, "MPU-6050: Initialized");
     /* USER CODE END 2 */
 
     /* Init scheduler */
@@ -607,6 +637,7 @@ void StartDefaultTask(void* argument)
     uint16_t ble_rx_len = 0U;
     GPIO_PinState last_state;
     DebugTerminalMode debug_mode = DEBUG_TERMINAL_MODE_WAITING;
+    uint32_t last_mpu6050_tick = HAL_GetTick() - MPU6050_DEBUG_UPDATE_PERIOD_MS;
 
     (void)argument;
 
@@ -616,8 +647,8 @@ void StartDefaultTask(void* argument)
     last_state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
     DebugTerminal_PrintLine(&huart3,
                             (last_state == GPIO_PIN_SET)
-                                ? "HM-10: CONNECTED"
-                                : "HM-10: DISCONNECTED");
+                                ? "HM10 STATE: CONNECTED"
+                                : "HM10 STATE: DISCONNECTED");
 
     for (;;)
     {
@@ -642,8 +673,13 @@ void StartDefaultTask(void* argument)
             last_state = state;
             DebugTerminal_PrintLine(&huart3,
                                     (state == GPIO_PIN_SET)
-                                        ? "HM-10: CONNECTED"
-                                        : "HM-10: DISCONNECTED");
+                                        ? "HM10 STATE: CONNECTED"
+                                        : "HM10 STATE: DISCONNECTED");
+        }
+
+        if (debug_mode == DEBUG_TERMINAL_MODE_MPU6050_DATA)
+        {
+            DebugTask_PrintMpu6050Data(&last_mpu6050_tick);
         }
 
         (void)DebugTask_ReadBleRx(debug_mode,
