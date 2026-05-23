@@ -326,7 +326,7 @@ static void DebugTerminal_PrintFormattedPhonePacket(UART_HandleTypeDef* huart,
 
     len = snprintf(debug_print,
                    sizeof(debug_print),
-                   "> HM-10: lat:%s | lon:%s | alt:%s m | hacc:%s m | qw:%s qx:%s qy:%s qz:%s\r\n",
+                   "> BLE: lat:%s | lon:%s | alt:%s m | hacc:%s m | qw:%s qx:%s qy:%s qz:%s\r\n",
                    lat,
                    lon,
                    alt,
@@ -380,26 +380,26 @@ void DebugTerminal_PrintTitle(UART_HandleTypeDef* huart)
 {
     static const char boot[] =
         "\r\n"
-        "+===========================================================+\r\n"
+        "+==========================================================+\r\n"
         "| TRAIL-HUD STM32 DEBUG TERMINAL                           |\r\n"
-        "+===========================================================+\r\n"
+        "+==========================================================+\r\n"
         "| Board : STM32H750B-DK                                    |\r\n"
         "| BLE   : HM-10 / AT-09 on USART1                          |\r\n"
         "| IMU   : MPU-6050 on I2C4                                 |\r\n"
         "| Debug : USART3 / ST-LINK VCP / PuTTY / 9600 8N1          |\r\n"
-        "+-----------------------------------------------------------+\r\n"
+        "+----------------------------------------------------------+\r\n"
         "| Default mode : WAITING                                   |\r\n"
         "| Press 'm' : cycle WAITING -> PINGS -> PHONE DATA -> IMU  |\r\n"
         "| Press 'w' : WAITING                                      |\r\n"
         "| Press 'p' : PINGS                                        |\r\n"
         "| Press 'd' : PHONE DATA                                   |\r\n"
         "| Press 'i' : MPU-6050 DATA                                |\r\n"
-        "+-----------------------------------------------------------+\r\n"
+        "+----------------------------------------------------------+\r\n"
         "| WAITING       : no periodic debug output                 |\r\n"
         "| PINGS         : send 4 BLE pings and wait for replies    |\r\n"
         "| PHONE DATA    : show formatted phone packets             |\r\n"
         "| MPU-6050 DATA : show accelerometer and gyroscope packets |\r\n"
-        "+===========================================================+\r\n"
+        "+==========================================================+\r\n"
         "\r\n";
 
     if (huart == NULL)
@@ -718,7 +718,7 @@ uint8_t DebugTerminal_HandleBleRxByte(UART_HandleTypeDef* debug_uart,
 
         if (mode == DEBUG_TERMINAL_MODE_PHONE_DATA)
         {
-            DebugTerminal_PrintLine(debug_uart, "BLE <- PHONE: RX line overflow, dropped partial packet");
+            DebugTerminal_PrintLine(debug_uart, "BLE: RX line overflow, dropped partial packet");
         }
     }
 

@@ -339,17 +339,21 @@ int main(void)
     MX_USART1_UART_Init();
     MX_I2C4_Init();
     /* USER CODE BEGIN 2 */
+    DebugTerminal_PrintTitle(&huart3);
+
     if (HM10_Init(&hm10, &huart1) != HM10_OK)
     {
         Error_Handler();
     }
 
     HM10_SetNameAndReset(&hm10, "Trail-Module", 1000U);
+    DebugTerminal_PrintLine(&huart3, "DEBUG: initialized HM-10 on USART1");
 
     if (MPU6050_Init(&mpu6050, &hi2c4, MPU6050_DEFAULT_I2C_ADDRESS) != MPU6050_OK)
     {
         Error_Handler();
     }
+    DebugTerminal_PrintLine(&huart3, "DEBUG: initialized MPU-6050 on I2C4");
     /* USER CODE END 2 */
 
     /* Init scheduler */
@@ -640,15 +644,13 @@ void StartDefaultTask(void* argument)
     uint32_t last_mpu6050_tick = HAL_GetTick() - MPU6050_DEBUG_UPDATE_PERIOD_MS;
 
     (void)argument;
-
-    DebugTerminal_PrintTitle(&huart3);
     DebugTerminal_PrintMode(&huart3, debug_mode);
 
     last_state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
     DebugTerminal_PrintLine(&huart3,
                             (last_state == GPIO_PIN_SET)
-                                ? "HM10 STATE: CONNECTED"
-                                : "HM10 STATE: DISCONNECTED");
+                                ? "BLE: connection established"
+                                : "BLE: connection terminated");
 
     for (;;)
     {
@@ -673,8 +675,8 @@ void StartDefaultTask(void* argument)
             last_state = state;
             DebugTerminal_PrintLine(&huart3,
                                     (state == GPIO_PIN_SET)
-                                        ? "HM10 STATE: CONNECTED"
-                                        : "HM10 STATE: DISCONNECTED");
+                                        ? "BLE: connection established"
+                                        : "BLE: connection terminated");
         }
 
         if (debug_mode == DEBUG_TERMINAL_MODE_MPU6050_DATA)
