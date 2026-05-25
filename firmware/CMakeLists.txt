@@ -42,16 +42,56 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
         # Add user defined library search paths
 )
 
-# Add sources to executable
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+# User-defined sources
+set(USER_SRC
         Core/Src/hm10.c
         Core/Src/mpu6050.c
         Core/Src/debug_terminal.c
 )
 
+# BSP sources
+set(BSP_SRC
+        Drivers/BSP/STM32H750B-DK/stm32h750b_discovery_bus.c
+        Drivers/BSP/STM32H750B-DK/stm32h750b_discovery_lcd.c
+        Drivers/BSP/STM32H750B-DK/stm32h750b_discovery_sdram.c
+        Drivers/BSP/STM32H750B-DK/stm32h750b_discovery_ts.c
+
+        Drivers/BSP/Components/ft5336/ft5336.c
+        Drivers/BSP/Components/ft5336/ft5336_reg.c
+        Drivers/BSP/Components/mt48lc4m32b2/mt48lc4m32b2.c
+)
+
+# HAL sources required by LCD/SDRAM BSP
+set(HAL_SRC
+        Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_ltdc.c
+        Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_ltdc_ex.c
+        Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_dma2d.c
+        Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_sdram.c
+        Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_fmc.c
+)
+
+# Utility sources
+set(UTILITIES_SRC
+        Utilities/lcd/stm32_lcd.c
+)
+
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        ${USER_SRC}
+        ${BSP_SRC}
+        ${HAL_SRC}
+        ${UTILITIES_SRC}
+)
+
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-        # Add user defined include paths
+        Core/Inc
+        Drivers/STM32H7xx_HAL_Driver/Inc
+        Drivers/BSP/STM32H750B-DK
+        Drivers/BSP/Components/ft5336
+        Drivers/BSP/Components/mt48lc4m32b2
+        Drivers/BSP/Components/Common
+        Utilities/lcd
+        Utilities/Fonts
 )
 
 # Add project symbols (macros)

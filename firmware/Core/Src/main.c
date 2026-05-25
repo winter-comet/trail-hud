@@ -121,12 +121,13 @@
 #include "main.h"
 #include "FreeRTOS.h"
 #include "cmsis_os2.h"
-
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "hm10.h"
 #include "debug_terminal.h"
 #include "mpu6050.h"
+#include "stm32h750b_discovery_lcd.h"
+#include "stm32_lcd.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -137,6 +138,9 @@
 /* USER CODE BEGIN PD */
 #define BLE_RX_LINE_SIZE 220U
 #define MPU6050_DEBUG_UPDATE_PERIOD_MS 1000U
+#define TRAIL_HUD_LCD_INSTANCE   0U
+
+#define TRAIL_HUD_COLOR_LIGHT_OLIVE  0xFF6B7540UL
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -144,7 +148,9 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+
 I2C_HandleTypeDef hi2c4;
+
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart3;
 
@@ -354,6 +360,103 @@ int main(void)
         Error_Handler();
     }
     DebugTerminal_PrintLine(&huart3, "DEBUG: initialized MPU-6050 on I2C4");
+
+    if (BSP_LCD_Init(TRAIL_HUD_LCD_INSTANCE, LCD_ORIENTATION_LANDSCAPE) != BSP_ERROR_NONE)
+    {
+        Error_Handler();
+    }
+
+    UTIL_LCD_SetFuncDriver(&LCD_Driver);
+
+    BSP_LCD_DisplayOn(TRAIL_HUD_LCD_INSTANCE);
+    BSP_LCD_SetBrightness(TRAIL_HUD_LCD_INSTANCE, 100U);
+    BSP_LCD_SetActiveLayer(TRAIL_HUD_LCD_INSTANCE, 0U);
+
+    UTIL_LCD_SetLayer(0U);
+
+    UTIL_LCD_Clear(UTIL_LCD_COLOR_BLACK);
+
+    UTIL_LCD_FillRect(0U, 0U, 96U, 136U, 0xFF55642AUL);
+    UTIL_LCD_FillRect(96U, 0U, 96U, 136U, 0xFF607036UL);
+    UTIL_LCD_FillRect(192U, 0U, 96U, 136U, 0xFF6B7540UL);
+    UTIL_LCD_FillRect(288U, 0U, 96U, 136U, 0xFF78824BUL);
+    UTIL_LCD_FillRect(384U, 0U, 96U, 136U, 0xFF869058UL);
+
+    UTIL_LCD_FillRect(0U, 136U, 480U, 2U, UTIL_LCD_COLOR_BLACK);
+
+    UTIL_LCD_FillRect(0U, 138U, 96U, 134U, 0xFF626D3BUL);
+    UTIL_LCD_FillRect(96U, 138U, 96U, 134U, 0xFF66713EUL);
+    UTIL_LCD_FillRect(192U, 138U, 96U, 134U, 0xFF6B7540UL);
+    UTIL_LCD_FillRect(288U, 138U, 96U, 134U, 0xFF707943UL);
+    UTIL_LCD_FillRect(384U, 138U, 96U, 134U, 0xFF757D46UL);
+
+    UTIL_LCD_FillRect(4U, 4U, 225U, 34U, UTIL_LCD_COLOR_BLACK);
+
+    /* T */
+    UTIL_LCD_FillRect(8U, 8U, 15U, 3U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(14U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
+
+    /* R */
+    UTIL_LCD_FillRect(26U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(26U, 8U, 12U, 3U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(26U, 17U, 12U, 3U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(38U, 11U, 3U, 6U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(35U, 20U, 3U, 3U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(38U, 23U, 3U, 6U, UTIL_LCD_COLOR_WHITE);
+
+    /* A */
+    UTIL_LCD_FillRect(44U, 11U, 3U, 18U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(56U, 11U, 3U, 18U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(47U, 8U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(47U, 17U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
+
+    /* I */
+    UTIL_LCD_FillRect(62U, 8U, 15U, 3U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(68U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(62U, 26U, 15U, 3U, UTIL_LCD_COLOR_WHITE);
+
+    /* L */
+    UTIL_LCD_FillRect(80U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(80U, 26U, 15U, 3U, UTIL_LCD_COLOR_WHITE);
+
+    /* - */
+    UTIL_LCD_FillRect(101U, 17U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
+
+    /* M */
+    UTIL_LCD_FillRect(116U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(128U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(119U, 11U, 3U, 3U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(122U, 14U, 3U, 3U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(125U, 11U, 3U, 3U, UTIL_LCD_COLOR_WHITE);
+
+    /* O */
+    UTIL_LCD_FillRect(137U, 8U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(137U, 26U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(134U, 11U, 3U, 15U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(146U, 11U, 3U, 15U, UTIL_LCD_COLOR_WHITE);
+
+    /* D */
+    UTIL_LCD_FillRect(152U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(155U, 8U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(155U, 26U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(164U, 11U, 3U, 15U, UTIL_LCD_COLOR_WHITE);
+
+    /* U */
+    UTIL_LCD_FillRect(170U, 8U, 3U, 18U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(182U, 8U, 3U, 18U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(173U, 26U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
+
+    /* L */
+    UTIL_LCD_FillRect(188U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(188U, 26U, 15U, 3U, UTIL_LCD_COLOR_WHITE);
+
+    /* E */
+    UTIL_LCD_FillRect(206U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(206U, 8U, 15U, 3U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(206U, 17U, 12U, 3U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(206U, 26U, 15U, 3U, UTIL_LCD_COLOR_WHITE);
+
+    UTIL_LCD_FillRect(8U, 33U, 213U, 2U, UTIL_LCD_COLOR_WHITE);
     /* USER CODE END 2 */
 
     /* Init scheduler */
@@ -412,44 +515,48 @@ void SystemClock_Config(void)
     RCC_OscInitTypeDef RCC_OscInitStruct = {0};
     RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-    /** Supply configuration update enable
-    */
     HAL_PWREx_ConfigSupply(PWR_LDO_SUPPLY);
 
-    /** Configure the main internal regulator output voltage
-    */
-    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
+    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
     while (!__HAL_PWR_GET_FLAG(PWR_FLAG_VOSRDY))
     {
     }
 
-    /** Initializes the RCC Oscillators according to the specified parameters
-    * in the RCC_OscInitTypeDef structure.
-    */
-    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-    RCC_OscInitStruct.HSIState = RCC_HSI_DIV1;
-    RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+    RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+    RCC_OscInitStruct.HSIState = RCC_HSI_OFF;
+    RCC_OscInitStruct.CSIState = RCC_CSI_OFF;
+
+    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+    RCC_OscInitStruct.PLL.PLLM = 5;
+    RCC_OscInitStruct.PLL.PLLN = 160;
+    RCC_OscInitStruct.PLL.PLLFRACN = 0;
+    RCC_OscInitStruct.PLL.PLLP = 2;
+    RCC_OscInitStruct.PLL.PLLR = 2;
+    RCC_OscInitStruct.PLL.PLLQ = 4;
+    RCC_OscInitStruct.PLL.PLLVCOSEL = RCC_PLL1VCOWIDE;
+    RCC_OscInitStruct.PLL.PLLRGE = RCC_PLL1VCIRANGE_2;
+
     if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
     {
         Error_Handler();
     }
 
-    /** Initializes the CPU, AHB and APB buses clocks
-    */
     RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
         | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2
         | RCC_CLOCKTYPE_D3PCLK1 | RCC_CLOCKTYPE_D1PCLK1;
-    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+
+    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
     RCC_ClkInitStruct.SYSCLKDivider = RCC_SYSCLK_DIV1;
-    RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV1;
-    RCC_ClkInitStruct.APB3CLKDivider = RCC_APB3_DIV1;
+    RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV2;
+    RCC_ClkInitStruct.APB3CLKDivider = RCC_APB3_DIV2;
     RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV2;
     RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV2;
     RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV2;
 
-    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
+    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
     {
         Error_Handler();
     }
@@ -599,19 +706,13 @@ static void MX_GPIO_Init(void)
     /* USER CODE END MX_GPIO_Init_1 */
 
     /* GPIO Ports Clock Enable */
+    __HAL_RCC_GPIOE_CLK_ENABLE();
     __HAL_RCC_GPIOG_CLK_ENABLE();
-    __HAL_RCC_GPIOK_CLK_ENABLE();
     __HAL_RCC_GPIOB_CLK_ENABLE();
     __HAL_RCC_GPIOD_CLK_ENABLE();
 
     /*Configure GPIO pin Output Level */
     HAL_GPIO_WritePin(HM10_EN_GPIO_Port, HM10_EN_Pin, GPIO_PIN_SET);
-
-    /*Configure GPIO pin : HM10_STATE_Pin */
-    GPIO_InitStruct.Pin = HM10_STATE_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(HM10_STATE_GPIO_Port, &GPIO_InitStruct);
 
     /*Configure GPIO pin : HM10_EN_Pin */
     GPIO_InitStruct.Pin = HM10_EN_Pin;
@@ -619,6 +720,12 @@ static void MX_GPIO_Init(void)
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(HM10_EN_GPIO_Port, &GPIO_InitStruct);
+
+    /*Configure GPIO pin : HM10_STATE_Pin */
+    GPIO_InitStruct.Pin = HM10_STATE_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(HM10_STATE_GPIO_Port, &GPIO_InitStruct);
 
     /* USER CODE BEGIN MX_GPIO_Init_2 */
     /* USER CODE END MX_GPIO_Init_2 */

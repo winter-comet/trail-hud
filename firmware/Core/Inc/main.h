@@ -57,10 +57,10 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define HM10_EN_Pin GPIO_PIN_3
+#define HM10_EN_GPIO_Port GPIOE
 #define HM10_STATE_Pin GPIO_PIN_3
 #define HM10_STATE_GPIO_Port GPIOG
-#define HM10_EN_Pin GPIO_PIN_1
-#define HM10_EN_GPIO_Port GPIOK
 
 /* USER CODE BEGIN Private defines */
 
