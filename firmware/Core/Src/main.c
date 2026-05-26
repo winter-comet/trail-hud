@@ -128,6 +128,7 @@
 #include "mpu6050.h"
 #include "stm32h750b_discovery_lcd.h"
 #include "stm32_lcd.h"
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -141,6 +142,15 @@
 #define TRAIL_HUD_LCD_INSTANCE   0U
 
 #define TRAIL_HUD_COLOR_LIGHT_OLIVE  0xFF6B7540UL
+#define TRAIL_TITLE                  "TRAIL-MODULE"
+#define TRAIL_TITLE_X                8U
+#define TRAIL_TITLE_Y                8U
+#define TRAIL_TITLE_CHAR_COUNT       ((uint32_t)(sizeof(TRAIL_TITLE) - 1U))
+
+#define TRAIL_TITLE_BOX_X            4U
+#define TRAIL_TITLE_BOX_Y            4U
+#define TRAIL_TITLE_BOX_WIDTH        215U
+#define TRAIL_TITLE_BOX_HEIGHT       34U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -311,6 +321,26 @@ static void DebugTask_PrintMpu6050Data(uint32_t* last_tick)
     *last_tick = HAL_GetTick();
 }
 
+static void DrawTitleText(void)
+{
+    UTIL_LCD_SetFont(&Font24);
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
+    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
+
+    UTIL_LCD_DisplayStringAt(
+        TRAIL_TITLE_X,
+        TRAIL_TITLE_Y,
+        (uint8_t *)TRAIL_TITLE,
+        LEFT_MODE
+    );
+
+    UTIL_LCD_DrawHLine(
+        TRAIL_TITLE_X,
+        TRAIL_TITLE_Y + Font24.Height + 1U,
+        TRAIL_TITLE_CHAR_COUNT * Font24.Width,
+        UTIL_LCD_COLOR_BLACK
+    );
+}
 /* USER CODE END 0 */
 
 /**
@@ -366,12 +396,11 @@ int main(void)
         Error_Handler();
     }
 
-    UTIL_LCD_SetFuncDriver(&LCD_Driver);
-
     BSP_LCD_DisplayOn(TRAIL_HUD_LCD_INSTANCE);
     BSP_LCD_SetBrightness(TRAIL_HUD_LCD_INSTANCE, 100U);
     BSP_LCD_SetActiveLayer(TRAIL_HUD_LCD_INSTANCE, 0U);
 
+    UTIL_LCD_SetFuncDriver(&LCD_Driver);
     UTIL_LCD_SetLayer(0U);
 
     UTIL_LCD_Clear(UTIL_LCD_COLOR_BLACK);
@@ -390,73 +419,19 @@ int main(void)
     UTIL_LCD_FillRect(288U, 138U, 96U, 134U, 0xFF707943UL);
     UTIL_LCD_FillRect(384U, 138U, 96U, 134U, 0xFF757D46UL);
 
-    UTIL_LCD_FillRect(4U, 4U, 225U, 34U, UTIL_LCD_COLOR_BLACK);
+    UTIL_LCD_FillRect(TRAIL_TITLE_BOX_X,
+                  TRAIL_TITLE_BOX_Y,
+                  TRAIL_TITLE_BOX_WIDTH,
+                  TRAIL_TITLE_BOX_HEIGHT,
+                  UTIL_LCD_COLOR_WHITE);
 
-    /* T */
-    UTIL_LCD_FillRect(8U, 8U, 15U, 3U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(14U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_DrawRect(TRAIL_TITLE_BOX_X,
+                      TRAIL_TITLE_BOX_Y,
+                      TRAIL_TITLE_BOX_WIDTH,
+                      TRAIL_TITLE_BOX_HEIGHT,
+                      UTIL_LCD_COLOR_BLACK);
 
-    /* R */
-    UTIL_LCD_FillRect(26U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(26U, 8U, 12U, 3U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(26U, 17U, 12U, 3U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(38U, 11U, 3U, 6U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(35U, 20U, 3U, 3U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(38U, 23U, 3U, 6U, UTIL_LCD_COLOR_WHITE);
-
-    /* A */
-    UTIL_LCD_FillRect(44U, 11U, 3U, 18U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(56U, 11U, 3U, 18U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(47U, 8U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(47U, 17U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
-
-    /* I */
-    UTIL_LCD_FillRect(62U, 8U, 15U, 3U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(68U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(62U, 26U, 15U, 3U, UTIL_LCD_COLOR_WHITE);
-
-    /* L */
-    UTIL_LCD_FillRect(80U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(80U, 26U, 15U, 3U, UTIL_LCD_COLOR_WHITE);
-
-    /* - */
-    UTIL_LCD_FillRect(101U, 17U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
-
-    /* M */
-    UTIL_LCD_FillRect(116U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(128U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(119U, 11U, 3U, 3U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(122U, 14U, 3U, 3U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(125U, 11U, 3U, 3U, UTIL_LCD_COLOR_WHITE);
-
-    /* O */
-    UTIL_LCD_FillRect(137U, 8U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(137U, 26U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(134U, 11U, 3U, 15U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(146U, 11U, 3U, 15U, UTIL_LCD_COLOR_WHITE);
-
-    /* D */
-    UTIL_LCD_FillRect(152U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(155U, 8U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(155U, 26U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(164U, 11U, 3U, 15U, UTIL_LCD_COLOR_WHITE);
-
-    /* U */
-    UTIL_LCD_FillRect(170U, 8U, 3U, 18U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(182U, 8U, 3U, 18U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(173U, 26U, 9U, 3U, UTIL_LCD_COLOR_WHITE);
-
-    /* L */
-    UTIL_LCD_FillRect(188U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(188U, 26U, 15U, 3U, UTIL_LCD_COLOR_WHITE);
-
-    /* E */
-    UTIL_LCD_FillRect(206U, 8U, 3U, 21U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(206U, 8U, 15U, 3U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(206U, 17U, 12U, 3U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(206U, 26U, 15U, 3U, UTIL_LCD_COLOR_WHITE);
-
-    UTIL_LCD_FillRect(8U, 33U, 213U, 2U, UTIL_LCD_COLOR_WHITE);
+    DrawTitleText();
     /* USER CODE END 2 */
 
     /* Init scheduler */
@@ -807,14 +782,15 @@ void MPU_Config(void)
 {
     MPU_Region_InitTypeDef MPU_InitStruct = {0};
 
-    /* Disables the MPU */
     HAL_MPU_Disable();
 
-    /** Initializes and configures the Region and the memory to be protected
-    */
+    /*
+     * Region 0: default protection region.
+     * This is your existing generated region.
+     */
     MPU_InitStruct.Enable = MPU_REGION_ENABLE;
     MPU_InitStruct.Number = MPU_REGION_NUMBER0;
-    MPU_InitStruct.BaseAddress = 0x0;
+    MPU_InitStruct.BaseAddress = 0x00000000U;
     MPU_InitStruct.Size = MPU_REGION_SIZE_4GB;
     MPU_InitStruct.SubRegionDisable = 0x87;
     MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
@@ -823,9 +799,27 @@ void MPU_Config(void)
     MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
     MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
     MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
-
     HAL_MPU_ConfigRegion(&MPU_InitStruct);
-    /* Enables the MPU */
+
+    /*
+     * Region 1: external SDRAM / LCD framebuffer.
+     *
+     * LCD_LAYER_0_ADDRESS in the working BSP project is 0xD0000000.
+     * Use a non-cacheable region so CPU pixel writes are visible to LTDC.
+     */
+    MPU_InitStruct.Enable = MPU_REGION_ENABLE;
+    MPU_InitStruct.Number = MPU_REGION_NUMBER1;
+    MPU_InitStruct.BaseAddress = 0xD0000000U;
+    MPU_InitStruct.Size = MPU_REGION_SIZE_4MB;
+    MPU_InitStruct.SubRegionDisable = 0x00;
+    MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
+    MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+    MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
+    MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
+    MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
+    MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
+    HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
     HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
 }
 
