@@ -137,20 +137,19 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BLE_RX_LINE_SIZE 220U
+#define BLE_RX_LINE_SIZE               220U
 #define MPU6050_DEBUG_UPDATE_PERIOD_MS 1000U
-#define TRAIL_HUD_LCD_INSTANCE   0U
+#define TRAIL_HUD_LCD_INSTANCE         0U
 
-#define TRAIL_HUD_COLOR_LIGHT_OLIVE  0xFF6B7540UL
-#define TRAIL_TITLE                  "TRAIL-MODULE"
-#define TRAIL_TITLE_X                8U
-#define TRAIL_TITLE_Y                8U
-#define TRAIL_TITLE_CHAR_COUNT       ((uint32_t)(sizeof(TRAIL_TITLE) - 1U))
-
-#define TRAIL_TITLE_BOX_X            4U
-#define TRAIL_TITLE_BOX_Y            4U
-#define TRAIL_TITLE_BOX_WIDTH        215U
-#define TRAIL_TITLE_BOX_HEIGHT       34U
+#define TRAIL_HUD_COLOR_LIGHT_OLIVE    0xFF6B7540UL
+#define TRAIL_TITLE                    "TRAIL-MODULE"
+#define TRAIL_TITLE_X                  8U
+#define TRAIL_TITLE_Y                  8U
+#define TRAIL_TITLE_CHAR_COUNT         ((uint32_t)(sizeof(TRAIL_TITLE) - 1U))
+#define TRAIL_TITLE_BOX_X              4U
+#define TRAIL_TITLE_BOX_Y              4U
+#define TRAIL_TITLE_BOX_WIDTH          215U
+#define TRAIL_TITLE_BOX_HEIGHT         34U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
