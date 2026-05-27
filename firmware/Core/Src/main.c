@@ -124,8 +124,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "hm10.h"
-#include "debug_terminal.h"
 #include "mpu6050.h"
+#include "debug_terminal.h"
+#include "trail_gui.h"
 #include "stm32h750b_discovery_lcd.h"
 #include "stm32_lcd.h"
 #include <string.h>
@@ -140,16 +141,6 @@
 #define BLE_RX_LINE_SIZE               220U
 #define MPU6050_DEBUG_UPDATE_PERIOD_MS 1000U
 #define TRAIL_HUD_LCD_INSTANCE         0U
-
-#define TRAIL_HUD_COLOR_LIGHT_OLIVE    0xFF6B7540UL
-#define TRAIL_TITLE                    "TRAIL-MODULE"
-#define TRAIL_TITLE_X                  8U
-#define TRAIL_TITLE_Y                  8U
-#define TRAIL_TITLE_CHAR_COUNT         ((uint32_t)(sizeof(TRAIL_TITLE) - 1U))
-#define TRAIL_TITLE_BOX_X              4U
-#define TRAIL_TITLE_BOX_Y              4U
-#define TRAIL_TITLE_BOX_WIDTH          215U
-#define TRAIL_TITLE_BOX_HEIGHT         34U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -319,27 +310,6 @@ static void DebugTask_PrintMpu6050Data(uint32_t* last_tick)
 
     *last_tick = HAL_GetTick();
 }
-
-static void DrawTitleText(void)
-{
-    UTIL_LCD_SetFont(&Font24);
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
-
-    UTIL_LCD_DisplayStringAt(
-        TRAIL_TITLE_X,
-        TRAIL_TITLE_Y,
-        (uint8_t *)TRAIL_TITLE,
-        LEFT_MODE
-    );
-
-    UTIL_LCD_DrawHLine(
-        TRAIL_TITLE_X,
-        TRAIL_TITLE_Y + Font24.Height + 1U,
-        TRAIL_TITLE_CHAR_COUNT * Font24.Width,
-        UTIL_LCD_COLOR_BLACK
-    );
-}
 /* USER CODE END 0 */
 
 /**
@@ -402,35 +372,7 @@ int main(void)
     UTIL_LCD_SetFuncDriver(&LCD_Driver);
     UTIL_LCD_SetLayer(0U);
 
-    UTIL_LCD_Clear(UTIL_LCD_COLOR_BLACK);
-
-    UTIL_LCD_FillRect(0U, 0U, 96U, 136U, 0xFF55642AUL);
-    UTIL_LCD_FillRect(96U, 0U, 96U, 136U, 0xFF607036UL);
-    UTIL_LCD_FillRect(192U, 0U, 96U, 136U, 0xFF6B7540UL);
-    UTIL_LCD_FillRect(288U, 0U, 96U, 136U, 0xFF78824BUL);
-    UTIL_LCD_FillRect(384U, 0U, 96U, 136U, 0xFF869058UL);
-
-    UTIL_LCD_FillRect(0U, 136U, 480U, 2U, UTIL_LCD_COLOR_BLACK);
-
-    UTIL_LCD_FillRect(0U, 138U, 96U, 134U, 0xFF626D3BUL);
-    UTIL_LCD_FillRect(96U, 138U, 96U, 134U, 0xFF66713EUL);
-    UTIL_LCD_FillRect(192U, 138U, 96U, 134U, 0xFF6B7540UL);
-    UTIL_LCD_FillRect(288U, 138U, 96U, 134U, 0xFF707943UL);
-    UTIL_LCD_FillRect(384U, 138U, 96U, 134U, 0xFF757D46UL);
-
-    UTIL_LCD_FillRect(TRAIL_TITLE_BOX_X,
-                  TRAIL_TITLE_BOX_Y,
-                  TRAIL_TITLE_BOX_WIDTH,
-                  TRAIL_TITLE_BOX_HEIGHT,
-                  UTIL_LCD_COLOR_WHITE);
-
-    UTIL_LCD_DrawRect(TRAIL_TITLE_BOX_X,
-                      TRAIL_TITLE_BOX_Y,
-                      TRAIL_TITLE_BOX_WIDTH,
-                      TRAIL_TITLE_BOX_HEIGHT,
-                      UTIL_LCD_COLOR_BLACK);
-
-    DrawTitleText();
+    TrailGui_DrawDefaultScreen();
     /* USER CODE END 2 */
 
     /* Init scheduler */
