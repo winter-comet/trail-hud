@@ -1,57 +1,78 @@
 #include "trail_gui.h"
 #include "stm32h750b_discovery_lcd.h"
 #include "stm32_lcd.h"
-#include <stddef.h>
 
 #define TRAIL_GUI_TITLE                    "TRAIL-MODULE"
-#define TRAIL_GUI_TITLE_X                  8U
-#define TRAIL_GUI_TITLE_Y                  8U
-#define TRAIL_GUI_TITLE_CHAR_COUNT         ((uint32_t)(sizeof(TRAIL_GUI_TITLE) - 1U))
-#define TRAIL_GUI_TITLE_BOX_X              4U
-#define TRAIL_GUI_TITLE_BOX_Y              4U
-#define TRAIL_GUI_TITLE_BOX_WIDTH          215U
-#define TRAIL_GUI_TITLE_BOX_HEIGHT         34U
-
 #define TRAIL_GUI_SPLIT_LINE_X             ((TRAIL_GUI_SCREEN_WIDTH - TRAIL_GUI_LINE_WIDTH_THIN) / 2U)
 
-static uint16_t TrailGui_MinU16(uint16_t a, uint16_t b);
-static uint16_t TrailGui_MaxU16(uint16_t a, uint16_t b);
+static uint8_t TrailGui_NormalizeAndClipBoundingBox(TrailGui_BoundingBox* bounding_box);
+static uint16_t TrailGui_GetBoundingBoxWidth(const TrailGui_BoundingBox* bounding_box);
+static uint16_t TrailGui_GetBoundingBoxHeight(const TrailGui_BoundingBox* bounding_box);
 static uint16_t TrailGui_ClampCornerLength(uint16_t corner_length_px,
                                            uint16_t width_px,
                                            uint16_t height_px);
-static uint16_t TrailGui_ClampToHalfExtents(uint16_t value_px,
-                                            uint16_t width_px,
-                                            uint16_t height_px);
+static uint16_t TrailGui_ClampRadius(uint16_t radius_px,
+                                     uint16_t width_px,
+                                     uint16_t height_px);
 static uint16_t TrailGui_CircleInsetForRow(uint16_t radius_px,
                                            uint16_t distance_from_corner_center_px);
 
-static uint16_t TrailGui_MinU16(uint16_t a, uint16_t b)
+static uint8_t TrailGui_NormalizeAndClipBoundingBox(TrailGui_BoundingBox* bounding_box)
 {
-    return (a < b) ? a : b;
-}
+    uint16_t tmp;
 
-static uint16_t TrailGui_MaxU16(uint16_t a, uint16_t b)
-{
-    return (a > b) ? a : b;
-}
-
-static uint16_t TrailGui_ClampToHalfExtents(uint16_t value_px,
-                                            uint16_t width_px,
-                                            uint16_t height_px)
-{
-    uint16_t max_value = width_px / 2U;
-
-    if ((height_px / 2U) < max_value)
+    if (bounding_box == 0)
     {
-        max_value = height_px / 2U;
+        return 0U;
     }
 
-    if (value_px > max_value)
+    if (bounding_box->x_min > bounding_box->x_max)
     {
-        return max_value;
+        tmp = bounding_box->x_min;
+        bounding_box->x_min = bounding_box->x_max;
+        bounding_box->x_max = tmp;
     }
 
-    return value_px;
+    if (bounding_box->y_min > bounding_box->y_max)
+    {
+        tmp = bounding_box->y_min;
+        bounding_box->y_min = bounding_box->y_max;
+        bounding_box->y_max = tmp;
+    }
+
+    if ((bounding_box->x_min >= TRAIL_GUI_SCREEN_WIDTH)
+        || (bounding_box->y_min >= TRAIL_GUI_SCREEN_HEIGHT))
+    {
+        return 0U;
+    }
+
+    if (bounding_box->x_max >= TRAIL_GUI_SCREEN_WIDTH)
+    {
+        bounding_box->x_max = TRAIL_GUI_SCREEN_WIDTH - 1U;
+    }
+
+    if (bounding_box->y_max >= TRAIL_GUI_SCREEN_HEIGHT)
+    {
+        bounding_box->y_max = TRAIL_GUI_SCREEN_HEIGHT - 1U;
+    }
+
+    if ((bounding_box->x_max < bounding_box->x_min)
+        || (bounding_box->y_max < bounding_box->y_min))
+    {
+        return 0U;
+    }
+
+    return 1U;
+}
+
+static uint16_t TrailGui_GetBoundingBoxWidth(const TrailGui_BoundingBox* bounding_box)
+{
+    return (uint16_t)(bounding_box->x_max - bounding_box->x_min + 1U);
+}
+
+static uint16_t TrailGui_GetBoundingBoxHeight(const TrailGui_BoundingBox* bounding_box)
+{
+    return (uint16_t)(bounding_box->y_max - bounding_box->y_min + 1U);
 }
 
 static uint16_t TrailGui_ClampCornerLength(uint16_t corner_length_px,
@@ -73,6 +94,32 @@ static uint16_t TrailGui_ClampCornerLength(uint16_t corner_length_px,
     return corner_length_px;
 }
 
+static uint16_t TrailGui_ClampRadius(uint16_t radius_px,
+                                     uint16_t width_px,
+                                     uint16_t height_px)
+{
+    uint16_t max_radius;
+
+    if ((width_px < 3U) || (height_px < 3U))
+    {
+        return 0U;
+    }
+
+    max_radius = (uint16_t)((width_px - 1U) / 2U);
+
+    if (((height_px - 1U) / 2U) < max_radius)
+    {
+        max_radius = (uint16_t)((height_px - 1U) / 2U);
+    }
+
+    if (radius_px > max_radius)
+    {
+        return max_radius;
+    }
+
+    return radius_px;
+}
+
 static uint16_t TrailGui_CircleInsetForRow(uint16_t radius_px,
                                            uint16_t distance_from_corner_center_px)
 {
@@ -90,7 +137,8 @@ static uint16_t TrailGui_CircleInsetForRow(uint16_t radius_px,
         * (uint32_t)distance_from_corner_center_px;
     x_extent = radius_px;
 
-    while (((x_extent * x_extent) + distance_squared) > radius_squared)
+    while ((x_extent > 0U)
+        && (((x_extent * x_extent) + distance_squared) > radius_squared))
     {
         x_extent--;
     }
@@ -105,43 +153,26 @@ void TrailGui_ClearScreen(uint32_t color)
 
 void TrailGui_DrawTitleText(void)
 {
-    UTIL_LCD_FillRect(TRAIL_GUI_TITLE_BOX_X,
-                      TRAIL_GUI_TITLE_BOX_Y,
-                      TRAIL_GUI_TITLE_BOX_WIDTH,
-                      TRAIL_GUI_TITLE_BOX_HEIGHT,
-                      UTIL_LCD_COLOR_WHITE);
+    TrailGui_BoundingBox rectangle_box = {
+        .x_min = 6U,
+        .x_max = 233U,
+        .y_min = 6U,
+        .y_max = 38U
+    };
 
-    UTIL_LCD_DrawRect(TRAIL_GUI_TITLE_BOX_X,
-                      TRAIL_GUI_TITLE_BOX_Y,
-                      TRAIL_GUI_TITLE_BOX_WIDTH,
-                      TRAIL_GUI_TITLE_BOX_HEIGHT,
-                      UTIL_LCD_COLOR_BLACK);
+    TrailGui_DrawRoundedRectangle(rectangle_box, 5U, UTIL_LCD_COLOR_WHITE);
 
     UTIL_LCD_SetFont(&Font24);
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
     UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
 
-    UTIL_LCD_DisplayStringAt(TRAIL_GUI_TITLE_X,
-                             TRAIL_GUI_TITLE_Y,
+    UTIL_LCD_DisplayStringAt(12U,
+                             12U,
                              (uint8_t*)TRAIL_GUI_TITLE,
                              LEFT_MODE);
-
-    UTIL_LCD_DrawHLine(TRAIL_GUI_TITLE_X,
-                       TRAIL_GUI_TITLE_Y + Font24.Height + 1U,
-                       TRAIL_GUI_TITLE_CHAR_COUNT * Font24.Width,
-                       UTIL_LCD_COLOR_BLACK);
 }
 
-void TrailGui_DrawVerticalSplitLine(void)
-{
-    UTIL_LCD_FillRect(TRAIL_GUI_SPLIT_LINE_X,
-                      0U,
-                      TRAIL_GUI_LINE_WIDTH_THIN,
-                      TRAIL_GUI_SCREEN_HEIGHT,
-                      UTIL_LCD_COLOR_BLACK);
-}
-
-void TrailGui_DrawCornerBoundingRectangle(const TrailGui_Point points[TRAIL_GUI_CORNER_COUNT],
+void TrailGui_DrawBoundingRectangle(TrailGui_BoundingBox bounding_box,
                                           uint16_t corner_length_px,
                                           uint32_t color)
 {
@@ -152,33 +183,25 @@ void TrailGui_DrawCornerBoundingRectangle(const TrailGui_Point points[TRAIL_GUI_
     uint16_t width_px;
     uint16_t height_px;
     uint16_t length_px;
-    uint32_t i;
 
-    if ((points == NULL) || (corner_length_px == 0U))
+    if (corner_length_px == 0U)
     {
         return;
     }
 
-    min_x = points[0].x;
-    max_x = points[0].x;
-    min_y = points[0].y;
-    max_y = points[0].y;
-
-    for (i = 1U; i < TRAIL_GUI_CORNER_COUNT; i++)
-    {
-        min_x = TrailGui_MinU16(min_x, points[i].x);
-        max_x = TrailGui_MaxU16(max_x, points[i].x);
-        min_y = TrailGui_MinU16(min_y, points[i].y);
-        max_y = TrailGui_MaxU16(max_y, points[i].y);
-    }
-
-    if ((max_x <= min_x) || (max_y <= min_y))
+    if (TrailGui_NormalizeAndClipBoundingBox(&bounding_box) == 0U)
     {
         return;
     }
 
-    width_px = max_x - min_x;
-    height_px = max_y - min_y;
+    width_px = TrailGui_GetBoundingBoxWidth(&bounding_box);
+    height_px = TrailGui_GetBoundingBoxHeight(&bounding_box);
+
+    if ((width_px < 2U) || (height_px < 2U))
+    {
+        return;
+    }
+
     length_px = TrailGui_ClampCornerLength(corner_length_px, width_px, height_px);
 
     if (length_px == 0U)
@@ -186,67 +209,53 @@ void TrailGui_DrawCornerBoundingRectangle(const TrailGui_Point points[TRAIL_GUI_
         return;
     }
 
+    min_x = bounding_box.x_min;
+    max_x = bounding_box.x_max;
+    min_y = bounding_box.y_min;
+    max_y = bounding_box.y_max;
+
     /* Top-left corner. */
     UTIL_LCD_DrawHLine(min_x, min_y, length_px, color);
     UTIL_LCD_DrawVLine(min_x, min_y, length_px, color);
 
     /* Top-right corner. */
-    UTIL_LCD_DrawHLine((uint32_t)(max_x - length_px), min_y, length_px, color);
+    UTIL_LCD_DrawHLine((uint32_t)(max_x - length_px + 1U), min_y, length_px, color);
     UTIL_LCD_DrawVLine(max_x, min_y, length_px, color);
 
     /* Bottom-left corner. */
     UTIL_LCD_DrawHLine(min_x, max_y, length_px, color);
-    UTIL_LCD_DrawVLine(min_x, (uint32_t)(max_y - length_px), length_px, color);
+    UTIL_LCD_DrawVLine(min_x, (uint32_t)(max_y - length_px + 1U), length_px, color);
 
     /* Bottom-right corner. */
-    UTIL_LCD_DrawHLine((uint32_t)(max_x - length_px), max_y, length_px, color);
-    UTIL_LCD_DrawVLine(max_x, (uint32_t)(max_y - length_px), length_px, color);
+    UTIL_LCD_DrawHLine((uint32_t)(max_x - length_px + 1U), max_y, length_px, color);
+    UTIL_LCD_DrawVLine(max_x, (uint32_t)(max_y - length_px + 1U), length_px, color);
 }
 
-void TrailGui_FillRoundedRectangle(const TrailGui_Point points[TRAIL_GUI_CORNER_COUNT],
+void TrailGui_DrawRoundedRectangle(TrailGui_BoundingBox bounding_box,
                                    uint16_t radius_px,
                                    uint32_t color)
 {
-    uint16_t min_x;
-    uint16_t max_x;
-    uint16_t min_y;
-    uint16_t max_y;
     uint16_t width_px;
     uint16_t height_px;
     uint16_t clamped_radius_px;
     uint16_t row;
-    uint32_t i;
 
-    if (points == NULL)
+    if (TrailGui_NormalizeAndClipBoundingBox(&bounding_box) == 0U)
     {
         return;
     }
 
-    min_x = points[0].x;
-    max_x = points[0].x;
-    min_y = points[0].y;
-    max_y = points[0].y;
-
-    for (i = 1U; i < TRAIL_GUI_CORNER_COUNT; i++)
-    {
-        min_x = TrailGui_MinU16(min_x, points[i].x);
-        max_x = TrailGui_MaxU16(max_x, points[i].x);
-        min_y = TrailGui_MinU16(min_y, points[i].y);
-        max_y = TrailGui_MaxU16(max_y, points[i].y);
-    }
-
-    if ((max_x <= min_x) || (max_y <= min_y))
-    {
-        return;
-    }
-
-    width_px = (uint16_t)(max_x - min_x + 1U);
-    height_px = (uint16_t)(max_y - min_y + 1U);
-    clamped_radius_px = TrailGui_ClampToHalfExtents(radius_px, width_px, height_px);
+    width_px = TrailGui_GetBoundingBoxWidth(&bounding_box);
+    height_px = TrailGui_GetBoundingBoxHeight(&bounding_box);
+    clamped_radius_px = TrailGui_ClampRadius(radius_px, width_px, height_px);
 
     if (clamped_radius_px == 0U)
     {
-        UTIL_LCD_FillRect(min_x, min_y, width_px, height_px, color);
+        UTIL_LCD_FillRect(bounding_box.x_min,
+                          bounding_box.y_min,
+                          width_px,
+                          height_px,
+                          color);
         return;
     }
 
@@ -261,21 +270,16 @@ void TrailGui_FillRoundedRectangle(const TrailGui_Point points[TRAIL_GUI_CORNER_
             distance_px = (uint16_t)(clamped_radius_px - row);
             inset_px = TrailGui_CircleInsetForRow(clamped_radius_px, distance_px);
         }
-        else if (row >= (height_px - clamped_radius_px))
+        else if (row > (uint16_t)(height_px - clamped_radius_px - 1U))
         {
             distance_px = (uint16_t)(row - (height_px - clamped_radius_px - 1U));
             inset_px = TrailGui_CircleInsetForRow(clamped_radius_px, distance_px);
         }
 
-        if ((inset_px * 2U) >= width_px)
-        {
-            continue;
-        }
-
         line_width_px = (uint16_t)(width_px - (2U * inset_px));
 
-        UTIL_LCD_DrawHLine((uint32_t)(min_x + inset_px),
-                           (uint32_t)(min_y + row),
+        UTIL_LCD_DrawHLine((uint32_t)(bounding_box.x_min + inset_px),
+                           (uint32_t)(bounding_box.y_min + row),
                            line_width_px,
                            color);
     }
@@ -283,17 +287,20 @@ void TrailGui_FillRoundedRectangle(const TrailGui_Point points[TRAIL_GUI_CORNER_
 
 void TrailGui_DrawDefaultScreen(void)
 {
-    TrailGui_ClearScreen(TRAIL_GUI_COLOR_LIGHT_OLIVE);
-    TrailGui_DrawVerticalSplitLine();
-    TrailGui_Point rectangle_points[TRAIL_GUI_CORNER_COUNT] = {
-        {4U,   42U},
-        {235U, 42U},
-        {235U, 268U},
-        {4U,   268U}
+    TrailGui_ClearScreen(UTIL_LCD_COLOR_BLACK);
+    TrailGui_BoundingBox menu_widget_bounds = {
+        .x_min = 0U,
+        .x_max = 239U,
+        .y_min = 0U,
+        .y_max = 272U
     };
-
-    TrailGui_DrawCornerBoundingRectangle(rectangle_points, 20U, UTIL_LCD_COLOR_BLACK);
-    TrailGui_FillRoundedRectangle(rectangle_points, 20U,UTIL_LCD_COLOR_WHITE);
-
+    TrailGui_DrawRoundedRectangle(menu_widget_bounds, 5U, TRAIL_GUI_COLOR_LIGHT_OLIVE);
+    TrailGui_BoundingBox path_widget_bounds = {
+        .x_min = 6U,
+        .x_max = 233U,
+        .y_min = 44U,
+        .y_max = 265U
+    };
+    TrailGui_DrawRoundedRectangle(path_widget_bounds, 5U, UTIL_LCD_COLOR_WHITE);
     TrailGui_DrawTitleText();
 }
