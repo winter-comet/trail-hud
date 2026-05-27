@@ -7,7 +7,8 @@ extern "C" {
 #endif
 
 #include "stm32h7xx_hal.h"
-#include "mpu6050.h"
+#include "hm10_packet.h"
+#include "mpu6050_packet.h"
 #include <stdint.h>
 
 #define DEBUG_TERMINAL_PING_COUNT 4U
@@ -77,7 +78,7 @@ void DebugTerminal_PrintMode(UART_HandleTypeDef* huart, DebugTerminalMode mode);
  *               unrecognized packets are ignored.
  * @return Nothing.
  */
-void DebugTerminal_PrintBlePacket(UART_HandleTypeDef* huart, const char* packet);
+void DebugTerminal_ParsePhonePacket(UART_HandleTypeDef* huart, const char* packet);
 
 /**
  * @brief Prints one formatted MPU-6050 accelerometer and gyroscope packet.

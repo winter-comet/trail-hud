@@ -45,7 +45,9 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # User-defined sources
 set(USER_SRC
         Core/Src/hm10.c
+        Core/Src/hm10_packet.c
         Core/Src/mpu6050.c
+        Core/Src/mpu6050_packet.c
         Core/Src/debug_terminal.c
 )
 

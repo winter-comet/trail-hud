@@ -6,48 +6,9 @@
 
 #define DEBUG_TERMINAL_PRINT_SIZE 220U
 
-static uint16_t DebugTerminal_ClampLength(int len, size_t buffer_size);
-const char* DebugTerminal_ModeName(DebugTerminalMode mode);
-void DebugTerminal_PrintTitle(UART_HandleTypeDef* huart);
-void DebugTerminal_PrintLine(UART_HandleTypeDef* huart, const char* text);
-void DebugTerminal_PrintMode(UART_HandleTypeDef* huart, DebugTerminalMode mode);
-void DebugTerminal_PrintBlePacket(UART_HandleTypeDef* huart, const char* packet);
-void DebugTerminal_PrintMpu6050Packet(UART_HandleTypeDef* huart,
-                                      const MPU6050_DataPacket* packet);
-void DebugTerminal_HandleInput(UART_HandleTypeDef* huart, DebugTerminalMode* mode);
-uint8_t DebugTerminal_HandleBleRxByte(UART_HandleTypeDef* debug_uart,
-                                      uint8_t rx_byte,
-                                      char* rx_line,
-                                      uint16_t* rx_len,
-                                      uint16_t rx_line_size,
-                                      DebugTerminalMode mode);
-
 static char debug_print[DEBUG_TERMINAL_PRINT_SIZE];
 
-/**
- * @brief Stores one parsed phone data packet received over BLE.
- *
- * Fields:
- * - lat_deg: Phone latitude in decimal degrees.
- * - lon_deg: Phone longitude in decimal degrees.
- * - alt_m: Phone altitude in meters.
- * - hacc_m: Horizontal location accuracy in meters.
- * - qw/qx/qy/qz: Phone orientation quaternion components.
- * - has_hacc: Nonzero when hacc_m was present in the packet; zero when the
- *   packet omitted horizontal accuracy.
- */
-typedef struct
-{
-    double lat_deg;
-    double lon_deg;
-    double alt_m;
-    double hacc_m;
-    double qw;
-    double qx;
-    double qy;
-    double qz;
-    uint8_t has_hacc;
-} DebugTerminalPhonePacket;
+static uint16_t DebugTerminal_ClampLength(int len, size_t buffer_size);
 
 /**
  * @brief Calculates an unsigned integer power of ten.
@@ -151,136 +112,6 @@ static void DebugTerminal_FormatFixed(char* out,
 }
 
 /**
- * @brief Advances a string pointer past spaces and tab characters.
- * @param text Pointer to a null-terminated string; NULL is not allowed.
- * @return Pointer to the first non-space, non-tab character in text.
- */
-static const char* DebugTerminal_SkipSpaces(const char* text)
-{
-    while ((*text == ' ') || (*text == '\t'))
-    {
-        text++;
-    }
-
-    return text;
-}
-
-/**
- * @brief Consumes one expected character from a parsed text cursor.
- * @param cursor Pointer to the current parse cursor; cursor and *cursor must not
- *               be NULL and are advanced on success.
- * @param expected Character that must appear after optional spaces.
- * @return 1 when the expected character is found and consumed, or 0 when the
- *         cursor is invalid or the expected character is not present.
- */
-static uint8_t DebugTerminal_ConsumeChar(const char** cursor, char expected)
-{
-    const char* p;
-
-    if ((cursor == NULL) || (*cursor == NULL))
-    {
-        return 0U;
-    }
-
-    p = DebugTerminal_SkipSpaces(*cursor);
-
-    if (*p != expected)
-    {
-        return 0U;
-    }
-
-    *cursor = DebugTerminal_SkipSpaces(p + 1);
-
-    return 1U;
-}
-
-/**
- * @brief Reads one floating-point value from a parsed text cursor.
- * @param cursor Pointer to the current parse cursor; cursor and *cursor must not
- *               be NULL and are advanced on success.
- * @param value Output pointer that receives the parsed double; NULL is not
- *              allowed.
- * @return 1 when a double value is parsed successfully, or 0 when arguments are
- *         invalid or no valid number is found.
- */
-static uint8_t DebugTerminal_ReadDouble(const char** cursor, double* value)
-{
-    char* end = NULL;
-    const char* start;
-
-    if ((cursor == NULL) || (*cursor == NULL) || (value == NULL))
-    {
-        return 0U;
-    }
-
-    start = DebugTerminal_SkipSpaces(*cursor);
-    *value = strtod(start, &end);
-
-    if (end == start)
-    {
-        return 0U;
-    }
-
-    *cursor = DebugTerminal_SkipSpaces(end);
-
-    return 1U;
-}
-
-/**
- * @brief Parses a BLE phone data packet into numeric location and rotation fields.
- * @param packet Null-terminated packet string to parse; NULL is not allowed and
- *               must match the expected phone packet format.
- * @param out Output packet structure that receives parsed values; NULL is not
- *            allowed and is cleared before parsing.
- * @return 1 when the full packet is parsed successfully, or 0 when arguments
- *         are invalid, the packet format is invalid, or extra non-space text
- *         remains after the closing bracket.
- */
-static uint8_t DebugTerminal_ParsePhonePacket(const char* packet,
-                                              DebugTerminalPhonePacket* out)
-{
-    const char* cursor;
-
-    if ((packet == NULL) || (out == NULL))
-    {
-        return 0U;
-    }
-
-    memset(out, 0, sizeof(*out));
-    cursor = packet;
-
-    if (!DebugTerminal_ConsumeChar(&cursor, '[')) return 0U;
-    if (!DebugTerminal_ReadDouble(&cursor, &out->lat_deg)) return 0U;
-    if (!DebugTerminal_ConsumeChar(&cursor, ',')) return 0U;
-    if (!DebugTerminal_ReadDouble(&cursor, &out->lon_deg)) return 0U;
-    if (!DebugTerminal_ConsumeChar(&cursor, ',')) return 0U;
-    if (!DebugTerminal_ReadDouble(&cursor, &out->alt_m)) return 0U;
-
-    if (DebugTerminal_ConsumeChar(&cursor, ','))
-    {
-        out->has_hacc = 1U;
-        if (!DebugTerminal_ReadDouble(&cursor, &out->hacc_m)) return 0U;
-        if (!DebugTerminal_ConsumeChar(&cursor, ';')) return 0U;
-    }
-    else
-    {
-        out->has_hacc = 0U;
-        if (!DebugTerminal_ConsumeChar(&cursor, ';')) return 0U;
-    }
-
-    if (!DebugTerminal_ReadDouble(&cursor, &out->qw)) return 0U;
-    if (!DebugTerminal_ConsumeChar(&cursor, ',')) return 0U;
-    if (!DebugTerminal_ReadDouble(&cursor, &out->qx)) return 0U;
-    if (!DebugTerminal_ConsumeChar(&cursor, ',')) return 0U;
-    if (!DebugTerminal_ReadDouble(&cursor, &out->qy)) return 0U;
-    if (!DebugTerminal_ConsumeChar(&cursor, ',')) return 0U;
-    if (!DebugTerminal_ReadDouble(&cursor, &out->qz)) return 0U;
-    if (!DebugTerminal_ConsumeChar(&cursor, ']')) return 0U;
-
-    return (*DebugTerminal_SkipSpaces(cursor) == '\0') ? 1U : 0U;
-}
-
-/**
  * @brief Prints a parsed phone data packet as one aligned debug-terminal line.
  * @param huart STM32 HAL UART handle for the debug terminal; NULL is allowed
  *              and causes no output.
@@ -289,7 +120,7 @@ static uint8_t DebugTerminal_ParsePhonePacket(const char* packet,
  * @return Nothing.
  */
 static void DebugTerminal_PrintFormattedPhonePacket(UART_HandleTypeDef* huart,
-                                                    const DebugTerminalPhonePacket* packet)
+                                                    const HM10_DataPacket* packet)
 {
     int len;
     uint16_t tx_len;
@@ -506,10 +337,10 @@ void DebugTerminal_PrintMode(UART_HandleTypeDef* huart, DebugTerminalMode mode)
  *               unrecognized packets are ignored.
  * @return Nothing.
  */
-void DebugTerminal_PrintBlePacket(UART_HandleTypeDef* huart, const char* packet)
+void DebugTerminal_ParsePhonePacket(UART_HandleTypeDef* huart, const char* packet)
 {
     size_t packet_len;
-    DebugTerminalPhonePacket parsed_packet;
+    HM10_DataPacket parsed_packet;
 
     if ((huart == NULL) || (packet == NULL))
     {
@@ -523,7 +354,7 @@ void DebugTerminal_PrintBlePacket(UART_HandleTypeDef* huart, const char* packet)
         return;
     }
 
-    if (DebugTerminal_ParsePhonePacket(packet, &parsed_packet) != 0U)
+    if (HM10_ParseDataPacket(packet, &parsed_packet) != 0U)
     {
         DebugTerminal_PrintFormattedPhonePacket(huart, &parsed_packet);
         return;
@@ -696,7 +527,7 @@ uint8_t DebugTerminal_HandleBleRxByte(UART_HandleTypeDef* debug_uart,
             }
             else if (mode == DEBUG_TERMINAL_MODE_PHONE_DATA)
             {
-                DebugTerminal_PrintBlePacket(debug_uart, rx_line);
+                DebugTerminal_ParsePhonePacket(debug_uart, rx_line);
             }
         }
 

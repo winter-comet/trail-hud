@@ -5,6 +5,7 @@
 extern "C" {
 #endif
 
+#include "mpu6050_packet.h"
 #include "stm32h7xx_hal.h"
 #include <stdint.h>
 
@@ -52,46 +53,6 @@ typedef struct
     uint16_t device_address;
     uint32_t timeout_ms;
 } MPU6050_HandleTypeDef;
-
-/**
- * @brief Stores one accelerometer, gyroscope, and temperature sample from the MPU-6050.
- *
- * Fields:
- * - accel_x_raw: Raw signed 16-bit X-axis accelerometer register value.
- * - accel_y_raw: Raw signed 16-bit Y-axis accelerometer register value.
- * - accel_z_raw: Raw signed 16-bit Z-axis accelerometer register value.
- * - temperature_raw: Raw signed 16-bit temperature register value.
- * - gyro_x_raw: Raw signed 16-bit X-axis gyroscope register value.
- * - gyro_y_raw: Raw signed 16-bit Y-axis gyroscope register value.
- * - gyro_z_raw: Raw signed 16-bit Z-axis gyroscope register value.
- * - accel_x_g: X-axis acceleration in g, assuming the default +/-2 g range.
- * - accel_y_g: Y-axis acceleration in g, assuming the default +/-2 g range.
- * - accel_z_g: Z-axis acceleration in g, assuming the default +/-2 g range.
- * - temperature_c: Internal sensor temperature in degrees Celsius.
- * - gyro_x_dps: X-axis angular velocity in degrees per second, assuming the
- *   default +/-250 dps range.
- * - gyro_y_dps: Y-axis angular velocity in degrees per second, assuming the
- *   default +/-250 dps range.
- * - gyro_z_dps: Z-axis angular velocity in degrees per second, assuming the
- *   default +/-250 dps range.
- */
-typedef struct
-{
-    int16_t accel_x_raw;
-    int16_t accel_y_raw;
-    int16_t accel_z_raw;
-    int16_t temperature_raw;
-    int16_t gyro_x_raw;
-    int16_t gyro_y_raw;
-    int16_t gyro_z_raw;
-    float accel_x_g;
-    float accel_y_g;
-    float accel_z_g;
-    float temperature_c;
-    float gyro_x_dps;
-    float gyro_y_dps;
-    float gyro_z_dps;
-} MPU6050_DataPacket;
 
 /**
  * @brief Binds an MPU-6050 helper handle to an initialized STM32 I2C peripheral and wakes the sensor.

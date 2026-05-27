@@ -1,6 +1,9 @@
 #include "hm10.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+
+#define HM10_DATA_PACKET_BUFFER_SIZE 128U
 
 /**
  * @brief Converts an STM32 HAL UART status value to an HM-10 library status.
@@ -270,6 +273,60 @@ HM10_StatusTypeDef HM10_ReadAvailable(HM10_HandleTypeDef* hm10,
 }
 
 /**
+ * @brief Reads and parses one phone data packet from the HM-10 UART.
+ * @param hm10 Initialized HM-10 handle; NULL is not allowed.
+ * @param packet Output packet receiving parsed phone data; NULL is not allowed.
+ * @return HM10_OK when a packet is read and parsed, HM10_INVALID_PACKET when
+ *         bytes are received but do not match the phone packet format,
+ *         HM10_INVALID_ARGUMENT for invalid pointers, HM10_NOT_INITIALIZED if
+ *         the handle has no UART, HM10_TIMEOUT if no first byte arrives in
+ *         time, HM10_BUSY if the UART is busy, or HM10_ERROR for a HAL UART error.
+ */
+HM10_StatusTypeDef HM10_ReadDataPacket(HM10_HandleTypeDef* hm10,
+                                       HM10_DataPacket* packet)
+{
+    HM10_StatusTypeDef status;
+    uint8_t raw_packet[HM10_DATA_PACKET_BUFFER_SIZE];
+    uint16_t received_length = 0U;
+
+    status = HM10_CheckHandle(hm10);
+    if (status != HM10_OK)
+    {
+        return status;
+    }
+
+    if (packet == NULL)
+    {
+        return HM10_INVALID_ARGUMENT;
+    }
+
+    status = HM10_ReadAvailable(hm10,
+                                raw_packet,
+                                (uint16_t)(sizeof(raw_packet) - 1U),
+                                &received_length,
+                                hm10->timeout_ms,
+                                hm10->inter_byte_timeout_ms);
+
+    if (status != HM10_OK)
+    {
+        return status;
+    }
+
+    raw_packet[received_length] = '\0';
+
+    while ((received_length > 0U) &&
+           ((raw_packet[received_length - 1U] == '\r') ||
+            (raw_packet[received_length - 1U] == '\n')))
+    {
+        received_length--;
+        raw_packet[received_length] = '\0';
+    }
+
+    return (HM10_ParseDataPacket((const char*)raw_packet, packet) != 0U) ?
+           HM10_OK : HM10_INVALID_PACKET;
+}
+
+/**
  * @brief Converts an HM-10 status value to a readable constant-name string.
  * @param status HM-10 status value to convert.
  * @return Pointer to a static string describing the status; returns
@@ -291,6 +348,8 @@ const char* HM10_StatusToString(HM10_StatusTypeDef status)
         return "HM10_INVALID_ARGUMENT";
     case HM10_NOT_INITIALIZED:
         return "HM10_NOT_INITIALIZED";
+    case HM10_INVALID_PACKET:
+        return "HM10_INVALID_PACKET";
     default:
         return "HM10_UNKNOWN_STATUS";
     }

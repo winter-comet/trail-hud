@@ -1,4 +1,5 @@
 #include "mpu6050.h"
+#include <stddef.h>
 
 #define MPU6050_REG_SMPLRT_DIV 0x19U
 #define MPU6050_REG_CONFIG 0x1AU
@@ -167,34 +168,6 @@ static MPU6050_StatusTypeDef MPU6050_ReadRegisters(MPU6050_HandleTypeDef* mpu605
 }
 
 /**
- * @brief Combines two MPU-6050 high/low register bytes into one signed 16-bit value.
- * @param high_byte Most significant register byte.
- * @param low_byte Least significant register byte.
- * @return Signed 16-bit value represented by the two input bytes.
- */
-static int16_t MPU6050_CombineBytes(uint8_t high_byte, uint8_t low_byte)
-{
-    return (int16_t)(((uint16_t)high_byte << 8U) | (uint16_t)low_byte);
-}
-
-/**
- * @brief Calculates scaled physical values from raw MPU-6050 packet fields.
- * @param packet Packet to update with scaled values; NULL is not allowed.
- * @return None.
- */
-static void MPU6050_UpdateScaledValues(MPU6050_DataPacket* packet)
-{
-    packet->accel_x_g = (float)packet->accel_x_raw / MPU6050_ACCEL_SCALE_LSB_PER_G;
-    packet->accel_y_g = (float)packet->accel_y_raw / MPU6050_ACCEL_SCALE_LSB_PER_G;
-    packet->accel_z_g = (float)packet->accel_z_raw / MPU6050_ACCEL_SCALE_LSB_PER_G;
-    packet->temperature_c = ((float)packet->temperature_raw / MPU6050_TEMP_SCALE_LSB_PER_DEG_C) +
-                            MPU6050_TEMP_OFFSET_DEG_C;
-    packet->gyro_x_dps = (float)packet->gyro_x_raw / MPU6050_GYRO_SCALE_LSB_PER_DPS;
-    packet->gyro_y_dps = (float)packet->gyro_y_raw / MPU6050_GYRO_SCALE_LSB_PER_DPS;
-    packet->gyro_z_dps = (float)packet->gyro_z_raw / MPU6050_GYRO_SCALE_LSB_PER_DPS;
-}
-
-/**
  * @brief Binds an MPU-6050 helper handle to an initialized STM32 I2C peripheral and wakes the sensor.
  * @param mpu6050 MPU-6050 handle to initialize; NULL is not allowed.
  * @param hi2c STM32 HAL I2C handle connected to the MPU-6050 module; NULL is not
@@ -318,12 +291,7 @@ MPU6050_StatusTypeDef MPU6050_ReadDataPacket(MPU6050_HandleTypeDef* mpu6050,
                                              MPU6050_DataPacket* packet)
 {
     MPU6050_StatusTypeDef status;
-    uint8_t data[MPU6050_SENSOR_DATA_LENGTH];
-
-    if (packet == NULL)
-    {
-        return MPU6050_INVALID_ARGUMENT;
-    }
+    uint8_t data[MPU6050_PACKET_RAW_DATA_LENGTH];
 
     status = MPU6050_ReadRegisters(mpu6050,
                                    MPU6050_REG_ACCEL_XOUT_H,
@@ -335,15 +303,10 @@ MPU6050_StatusTypeDef MPU6050_ReadDataPacket(MPU6050_HandleTypeDef* mpu6050,
         return status;
     }
 
-    packet->accel_x_raw = MPU6050_CombineBytes(data[0], data[1]);
-    packet->accel_y_raw = MPU6050_CombineBytes(data[2], data[3]);
-    packet->accel_z_raw = MPU6050_CombineBytes(data[4], data[5]);
-    packet->temperature_raw = MPU6050_CombineBytes(data[6], data[7]);
-    packet->gyro_x_raw = MPU6050_CombineBytes(data[8], data[9]);
-    packet->gyro_y_raw = MPU6050_CombineBytes(data[10], data[11]);
-    packet->gyro_z_raw = MPU6050_CombineBytes(data[12], data[13]);
-
-    MPU6050_UpdateScaledValues(packet);
+    if (MPU6050_FillDataPacketFromRaw(packet, data) == 0U)
+    {
+        return MPU6050_INVALID_ARGUMENT;
+    }
 
     return MPU6050_OK;
 }

@@ -6,6 +6,7 @@ extern "C" {
 
 #endif
 
+#include "hm10_packet.h"
 #include "stm32h7xx_hal.h"
 #include <stdint.h>
 
@@ -31,7 +32,8 @@ typedef enum
     HM10_TIMEOUT,
     HM10_BUSY,
     HM10_INVALID_ARGUMENT,
-    HM10_NOT_INITIALIZED
+    HM10_NOT_INITIALIZED,
+    HM10_INVALID_PACKET
 } HM10_StatusTypeDef;
 
 /**
@@ -140,6 +142,19 @@ HM10_StatusTypeDef HM10_ReadAvailable(HM10_HandleTypeDef* hm10,
                                       uint16_t* received_length,
                                       uint32_t first_byte_timeout_ms,
                                       uint32_t inter_byte_timeout_ms);
+
+/**
+ * @brief Reads and parses one phone data packet from the HM-10 UART.
+ * @param hm10 Initialized HM-10 handle; NULL is not allowed.
+ * @param packet Output packet receiving parsed phone data; NULL is not allowed.
+ * @return HM10_OK when a packet is read and parsed, HM10_INVALID_PACKET when
+ *         bytes are received but do not match the phone packet format,
+ *         HM10_INVALID_ARGUMENT for invalid pointers, HM10_NOT_INITIALIZED if
+ *         the handle has no UART, HM10_TIMEOUT if no first byte arrives in
+ *         time, HM10_BUSY if the UART is busy, or HM10_ERROR for a HAL UART error.
+ */
+HM10_StatusTypeDef HM10_ReadDataPacket(HM10_HandleTypeDef* hm10,
+                                       HM10_DataPacket* packet);
 
 /**
  * @brief Converts an HM-10 status value to a readable constant-name string.
