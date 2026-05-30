@@ -8,6 +8,7 @@
 #ifdef __cplusplus
 extern "C" {
 
+
 #endif
 
 #define TRAIL_GUI_SCREEN_MARGIN 6U

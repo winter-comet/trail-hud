@@ -28,22 +28,22 @@ typedef struct
     float z;
 } TrailGui_Quaternion;
 
-static uint8_t  TrailGui_NormalizeAndClipBoundingBox(TrailGui_BoundingBox* bounding_box);
+static uint8_t TrailGui_NormalizeAndClipBoundingBox(TrailGui_BoundingBox* bounding_box);
 static uint16_t TrailGui_GetBoundingBoxWidth(const TrailGui_BoundingBox* bounding_box);
 static uint16_t TrailGui_GetBoundingBoxHeight(const TrailGui_BoundingBox* bounding_box);
 static uint16_t TrailGui_ClampCornerLength(uint16_t corner_length_px, uint16_t width_px, uint16_t height_px);
 static uint16_t TrailGui_ClampRadius(uint16_t radius_px, uint16_t width_px, uint16_t height_px);
 static uint16_t TrailGui_CircleInsetForRow(uint16_t radius_px, uint16_t distance_from_corner_center_px);
-static int32_t  TrailGui_Abs32(int32_t value);
-static void     TrailGui_FillLinePoint(int32_t center_x, int32_t center_y, uint16_t width, uint32_t color);
+static int32_t TrailGui_Abs32(int32_t value);
+static void TrailGui_FillLinePoint(int32_t center_x, int32_t center_y, uint16_t width, uint32_t color);
 static uint16_t TrailGui_MinUint16(uint16_t lhs, uint16_t rhs);
-static int32_t  TrailGui_RoundFloatToInt32(float value);
+static int32_t TrailGui_RoundFloatToInt32(float value);
 static uint16_t TrailGui_ClampInt32ToUint16(int32_t value, uint16_t min_value, uint16_t max_value);
 static TrailGui_Quaternion TrailGui_QuaternionIdentity(void);
 static TrailGui_Quaternion TrailGui_QuaternionNormalize(TrailGui_Quaternion quaternion);
 static TrailGui_Quaternion TrailGui_QuaternionConjugate(TrailGui_Quaternion quaternion);
 static TrailGui_Quaternion TrailGui_QuaternionMultiply(TrailGui_Quaternion lhs, TrailGui_Quaternion rhs);
-static TrailGui_Vector3    TrailGui_QuaternionRotateVector(TrailGui_Quaternion quaternion, TrailGui_Vector3 vector);
+static TrailGui_Vector3 TrailGui_QuaternionRotateVector(TrailGui_Quaternion quaternion, TrailGui_Vector3 vector);
 static TrailGui_Quaternion TrailGui_BuildPhoneQuaternion(const HM10_DataPacket* hm10_packet);
 static TrailGui_Quaternion TrailGui_BuildVectorToVectorQuaternion(TrailGui_Vector3 from, TrailGui_Vector3 to);
 static TrailGui_Quaternion TrailGui_BuildMpuGravityQuaternion(const MPU6050_DataPacket* mpu6050_packet);
