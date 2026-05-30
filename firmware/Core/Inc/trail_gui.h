@@ -2,19 +2,20 @@
 #define TRAIL_GUI_H
 
 #include <stdint.h>
+#include "hm10_packet.h"
+#include "mpu6050_packet.h"
 
 #ifdef __cplusplus
 extern "C" {
 
 #endif
 
-#define TRAIL_GUI_SCREEN_MARGIN     6U
-#define TRAIL_GUI_LINE_WIDTH_THIN   2U
-#define TRAIL_GUI_LINE_WIDTH_THICK  (TRAIL_GUI_LINE_WIDTH_THIN * 2U)
+#define TRAIL_GUI_SCREEN_MARGIN 6U
+#define TRAIL_GUI_LINE_WIDTH_THIN 2U
+#define TRAIL_GUI_LINE_WIDTH_THICK (TRAIL_GUI_LINE_WIDTH_THIN * 2U)
 #define TRAIL_GUI_COLOR_LIGHT_OLIVE 0xFF607036UL
-
-#define TRAIL_GUI_SCREEN_WIDTH      480U
-#define TRAIL_GUI_SCREEN_HEIGHT     272U
+#define TRAIL_GUI_SCREEN_WIDTH 480U
+#define TRAIL_GUI_SCREEN_HEIGHT 272U
 
 /**
  * @brief Stores one point in LCD pixel coordinates.
@@ -119,6 +120,30 @@ void TrailGui_DrawLine(TrailGui_Point start,
                        TrailGui_Point end,
                        uint16_t width,
                        uint32_t color);
+
+/**
+ * @brief Draws a line-only 3D cuboid representing the phone orientation.
+ * @param hm10_packet Parsed phone data packet. NULL is not allowed. The phone
+ *                    quaternion fields are used as the main orientation source.
+ * @param mpu6050_packet Latest MPU-6050 data packet. NULL is not allowed. The
+ *                       accelerometer values provide board tilt compensation,
+ *                       while gyroscope values add a small rate-based visual
+ *                       offset because the packet does not store an integrated
+ *                       absolute MPU orientation.
+ * @param bounding_box LCD region that contains the complete phone render.
+ *                     Reversed bounds are normalized internally, and out-of-
+ *                     screen bounds are clipped. The cuboid rotates around the
+ *                     center of this region and stays inside it.
+ * @param line_width Cuboid edge thickness in pixels. A value of 0 leaves the
+ *                   screen unchanged.
+ * @param color ARGB8888 LCD color value used for all cuboid edges.
+ * @return None.
+ */
+void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
+                              const MPU6050_DataPacket* mpu6050_packet,
+                              TrailGui_BoundingBox bounding_box,
+                              uint16_t line_width,
+                              uint32_t color);
 
 #ifdef __cplusplus
 }

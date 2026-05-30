@@ -140,7 +140,10 @@
 /* USER CODE BEGIN PD */
 #define BLE_RX_LINE_SIZE               220U
 #define MPU6050_DEBUG_UPDATE_PERIOD_MS 1000U
-#define TRAIL_HUD_LCD_INSTANCE         0U
+#define TRAIL_HUD_LCD_INSTANCE 0U
+#define PHONE_RENDER_LINE_WIDTH 1U
+#define PHONE_RENDER_LINE_COLOR UTIL_LCD_COLOR_WHITE
+#define PHONE_RENDER_CLEAR_COLOR UTIL_LCD_COLOR_BLACK
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -148,9 +151,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-
 I2C_HandleTypeDef hi2c4;
-
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart3;
 
@@ -164,6 +165,12 @@ const osThreadAttr_t defaultTask_attributes = {
 /* USER CODE BEGIN PV */
 static HM10_HandleTypeDef hm10;
 static MPU6050_HandleTypeDef mpu6050;
+static const TrailGui_BoundingBox phone_render_bounds = {
+    .x_min = (TRAIL_GUI_SCREEN_WIDTH / 2U),
+    .x_max = (TRAIL_GUI_SCREEN_WIDTH - 1U),
+    .y_min = 0U,
+    .y_max = (TRAIL_GUI_SCREEN_HEIGHT - 1U)
+};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -176,6 +183,13 @@ static void MX_I2C4_Init(void);
 void StartDefaultTask(void* argument);
 
 /* USER CODE BEGIN PFP */
+static void DebugTask_ClearPhoneRenderArea(void);
+static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet);
+static uint8_t DebugTask_HandleBleRxByte(DebugTerminalMode mode,
+                                         uint8_t rx_byte,
+                                         char* ble_rx_line,
+                                         uint16_t* ble_rx_len,
+                                         uint16_t ble_rx_line_size);
 static uint8_t DebugTask_ReadBleRx(DebugTerminalMode mode,
                                    char* ble_rx_line,
                                    uint16_t* ble_rx_len,
@@ -193,6 +207,111 @@ static void DebugTask_PrintMpu6050Data(uint32_t* last_tick);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void DebugTask_ClearPhoneRenderArea(void)
+{
+    TrailGui_DrawRoundedRectangle(phone_render_bounds, 0U, PHONE_RENDER_CLEAR_COLOR);
+}
+
+static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
+{
+    MPU6050_DataPacket mpu6050_packet;
+
+    if (hm10_packet == NULL)
+    {
+        return;
+    }
+
+    if (HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin) != GPIO_PIN_SET)
+    {
+        return;
+    }
+
+    if (MPU6050_ReadDataPacket(&mpu6050, &mpu6050_packet) != MPU6050_OK)
+    {
+        DebugTerminal_PrintLine(&huart3, "MPU-6050: read failed during phone render");
+        return;
+    }
+
+    DebugTask_ClearPhoneRenderArea();
+    TrailGui_DrawPhoneCuboid(hm10_packet,
+                             &mpu6050_packet,
+                             phone_render_bounds,
+                             PHONE_RENDER_LINE_WIDTH,
+                             PHONE_RENDER_LINE_COLOR);
+}
+
+static uint8_t DebugTask_HandleBleRxByte(DebugTerminalMode mode,
+                                         uint8_t rx_byte,
+                                         char* ble_rx_line,
+                                         uint16_t* ble_rx_len,
+                                         uint16_t ble_rx_line_size)
+{
+    uint8_t is_ping_reply = 0U;
+
+    if ((ble_rx_line == NULL) || (ble_rx_len == NULL) || (ble_rx_line_size == 0U))
+    {
+        return 0U;
+    }
+
+    if (rx_byte == '\r')
+    {
+        return 0U;
+    }
+
+    if (rx_byte == '\n')
+    {
+        ble_rx_line[*ble_rx_len] = '\0';
+
+        if (*ble_rx_len > 0U)
+        {
+            if (strcmp(ble_rx_line, DEBUG_TERMINAL_PING_REPLY) == 0)
+            {
+                is_ping_reply = 1U;
+            }
+            else
+            {
+                HM10_DataPacket hm10_packet;
+
+                if (HM10_ParseDataPacket(ble_rx_line, &hm10_packet) != 0U)
+                {
+                    DebugTask_RenderPhoneFrame(&hm10_packet);
+
+                    if (mode == DEBUG_TERMINAL_MODE_PHONE_DATA)
+                    {
+                        DebugTerminal_ParsePhonePacket(&huart3, ble_rx_line);
+                    }
+                }
+                else if (mode == DEBUG_TERMINAL_MODE_PHONE_DATA)
+                {
+                    DebugTerminal_ParsePhonePacket(&huart3, ble_rx_line);
+                }
+            }
+        }
+
+        *ble_rx_len = 0U;
+        ble_rx_line[0] = '\0';
+        return is_ping_reply;
+    }
+
+    if (*ble_rx_len < (uint16_t)(ble_rx_line_size - 1U))
+    {
+        ble_rx_line[*ble_rx_len] = (char)rx_byte;
+        (*ble_rx_len)++;
+    }
+    else
+    {
+        *ble_rx_len = 0U;
+        ble_rx_line[0] = '\0';
+
+        if (mode == DEBUG_TERMINAL_MODE_PHONE_DATA)
+        {
+            DebugTerminal_PrintLine(&huart3, "BLE: RX line overflow, dropped partial packet");
+        }
+    }
+
+    return 0U;
+}
+
 static uint8_t DebugTask_ReadBleRx(DebugTerminalMode mode,
                                    char* ble_rx_line,
                                    uint16_t* ble_rx_len,
@@ -203,12 +322,11 @@ static uint8_t DebugTask_ReadBleRx(DebugTerminalMode mode,
 
     while (HM10_ReadByte(&hm10, &rx_byte, 1U) == HM10_OK)
     {
-        if (DebugTerminal_HandleBleRxByte(&huart3,
-                                          rx_byte,
-                                          ble_rx_line,
-                                          ble_rx_len,
-                                          ble_rx_line_size,
-                                          mode) != 0U)
+        if (DebugTask_HandleBleRxByte(mode,
+                                      rx_byte,
+                                      ble_rx_line,
+                                      ble_rx_len,
+                                      ble_rx_line_size) != 0U)
         {
             ping_reply_received = 1U;
         }
@@ -273,9 +391,7 @@ static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode,
         }
 
         DebugTerminal_PrintLine(&huart3,
-                                (reply_received != 0U)
-                                    ? "BLE: reply from phone"
-                                    : "BLE: no reply");
+                                (reply_received != 0U) ? "BLE: reply from phone" : "BLE: no reply");
     }
 
     *debug_mode = DEBUG_TERMINAL_MODE_WAITING;
@@ -310,6 +426,7 @@ static void DebugTask_PrintMpu6050Data(uint32_t* last_tick)
 
     *last_tick = HAL_GetTick();
 }
+
 /* USER CODE END 0 */
 
 /**
@@ -368,10 +485,8 @@ int main(void)
     BSP_LCD_DisplayOn(TRAIL_HUD_LCD_INSTANCE);
     BSP_LCD_SetBrightness(TRAIL_HUD_LCD_INSTANCE, 100U);
     BSP_LCD_SetActiveLayer(TRAIL_HUD_LCD_INSTANCE, 0U);
-
     UTIL_LCD_SetFuncDriver(&LCD_Driver);
     UTIL_LCD_SetLayer(0U);
-
     TrailGui_DrawDefaultScreen();
     /* USER CODE END 2 */
 
@@ -432,7 +547,6 @@ void SystemClock_Config(void)
     RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
     HAL_PWREx_ConfigSupply(PWR_LDO_SUPPLY);
-
     __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
     while (!__HAL_PWR_GET_FLAG(PWR_FLAG_VOSRDY))
@@ -443,7 +557,6 @@ void SystemClock_Config(void)
     RCC_OscInitStruct.HSEState = RCC_HSE_ON;
     RCC_OscInitStruct.HSIState = RCC_HSI_OFF;
     RCC_OscInitStruct.CSIState = RCC_CSI_OFF;
-
     RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
     RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
     RCC_OscInitStruct.PLL.PLLM = 5;
@@ -460,10 +573,9 @@ void SystemClock_Config(void)
         Error_Handler();
     }
 
-    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
-        | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2
-        | RCC_CLOCKTYPE_D3PCLK1 | RCC_CLOCKTYPE_D1PCLK1;
-
+    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK |
+        RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2 |
+        RCC_CLOCKTYPE_D3PCLK1 | RCC_CLOCKTYPE_D1PCLK1;
     RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
     RCC_ClkInitStruct.SYSCLKDivider = RCC_SYSCLK_DIV1;
     RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV2;
@@ -486,12 +598,11 @@ void SystemClock_Config(void)
 static void MX_I2C4_Init(void)
 {
     /* USER CODE BEGIN I2C4_Init 0 */
-
     /* USER CODE END I2C4_Init 0 */
 
     /* USER CODE BEGIN I2C4_Init 1 */
-
     /* USER CODE END I2C4_Init 1 */
+
     hi2c4.Instance = I2C4;
     hi2c4.Init.Timing = 0x00707CBB;
     hi2c4.Init.OwnAddress1 = 0;
@@ -501,26 +612,25 @@ static void MX_I2C4_Init(void)
     hi2c4.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
     hi2c4.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
     hi2c4.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+
     if (HAL_I2C_Init(&hi2c4) != HAL_OK)
     {
         Error_Handler();
     }
 
-    /** Configure Analogue filter
-    */
+    /** Configure Analogue filter */
     if (HAL_I2CEx_ConfigAnalogFilter(&hi2c4, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
     {
         Error_Handler();
     }
 
-    /** Configure Digital filter
-    */
+    /** Configure Digital filter */
     if (HAL_I2CEx_ConfigDigitalFilter(&hi2c4, 0) != HAL_OK)
     {
         Error_Handler();
     }
-    /* USER CODE BEGIN I2C4_Init 2 */
 
+    /* USER CODE BEGIN I2C4_Init 2 */
     /* USER CODE END I2C4_Init 2 */
 }
 
@@ -536,6 +646,7 @@ static void MX_USART1_UART_Init(void)
 
     /* USER CODE BEGIN USART1_Init 1 */
     /* USER CODE END USART1_Init 1 */
+
     huart1.Instance = USART1;
     huart1.Init.BaudRate = 9600;
     huart1.Init.WordLength = UART_WORDLENGTH_8B;
@@ -547,22 +658,27 @@ static void MX_USART1_UART_Init(void)
     huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
     huart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
     huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+
     if (HAL_UART_Init(&huart1) != HAL_OK)
     {
         Error_Handler();
     }
+
     if (HAL_UARTEx_SetTxFifoThreshold(&huart1, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
     {
         Error_Handler();
     }
+
     if (HAL_UARTEx_SetRxFifoThreshold(&huart1, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
     {
         Error_Handler();
     }
+
     if (HAL_UARTEx_DisableFifoMode(&huart1) != HAL_OK)
     {
         Error_Handler();
     }
+
     /* USER CODE BEGIN USART1_Init 2 */
     /* USER CODE END USART1_Init 2 */
 }
@@ -590,22 +706,27 @@ static void MX_USART3_UART_Init(void)
     huart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
     huart3.Init.ClockPrescaler = UART_PRESCALER_DIV1;
     huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+
     if (HAL_UART_Init(&huart3) != HAL_OK)
     {
         Error_Handler();
     }
+
     if (HAL_UARTEx_SetTxFifoThreshold(&huart3, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
     {
         Error_Handler();
     }
+
     if (HAL_UARTEx_SetRxFifoThreshold(&huart3, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
     {
         Error_Handler();
     }
+
     if (HAL_UARTEx_DisableFifoMode(&huart3) != HAL_OK)
     {
         Error_Handler();
     }
+
     /* USER CODE BEGIN USART3_Init 2 */
     /* USER CODE END USART3_Init 2 */
 }
@@ -618,6 +739,7 @@ static void MX_USART3_UART_Init(void)
 static void MX_GPIO_Init(void)
 {
     GPIO_InitTypeDef GPIO_InitStruct = {0};
+
     /* USER CODE BEGIN MX_GPIO_Init_1 */
     /* USER CODE END MX_GPIO_Init_1 */
 
@@ -667,6 +789,7 @@ void StartDefaultTask(void* argument)
     uint32_t last_mpu6050_tick = HAL_GetTick() - MPU6050_DEBUG_UPDATE_PERIOD_MS;
 
     (void)argument;
+
     DebugTerminal_PrintMode(&huart3, debug_mode);
 
     last_state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
@@ -675,12 +798,16 @@ void StartDefaultTask(void* argument)
                                 ? "BLE: connection established"
                                 : "BLE: connection terminated");
 
+    if (last_state != GPIO_PIN_SET)
+    {
+        DebugTask_ClearPhoneRenderArea();
+    }
+
     for (;;)
     {
         GPIO_PinState state;
 
         state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
-
         DebugTerminal_HandleInput(&huart3, &debug_mode);
 
         if (debug_mode == DEBUG_TERMINAL_MODE_PINGS)
@@ -700,6 +827,11 @@ void StartDefaultTask(void* argument)
                                     (state == GPIO_PIN_SET)
                                         ? "BLE: connection established"
                                         : "BLE: connection terminated");
+
+            if (state != GPIO_PIN_SET)
+            {
+                DebugTask_ClearPhoneRenderArea();
+            }
         }
 
         if (debug_mode == DEBUG_TERMINAL_MODE_MPU6050_DATA)
@@ -718,7 +850,6 @@ void StartDefaultTask(void* argument)
 }
 
 /* MPU Configuration */
-
 void MPU_Config(void)
 {
     MPU_Region_InitTypeDef MPU_InitStruct = {0};
@@ -740,6 +871,7 @@ void MPU_Config(void)
     MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
     MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
     MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
+
     HAL_MPU_ConfigRegion(&MPU_InitStruct);
 
     /*
@@ -759,8 +891,8 @@ void MPU_Config(void)
     MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
     MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
     MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
-    HAL_MPU_ConfigRegion(&MPU_InitStruct);
 
+    HAL_MPU_ConfigRegion(&MPU_InitStruct);
     HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
 }
 
@@ -777,6 +909,7 @@ void Error_Handler(void)
     }
     /* USER CODE END Error_Handler_Debug */
 }
+
 #ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
