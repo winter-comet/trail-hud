@@ -121,6 +121,7 @@
 #include "main.h"
 #include "FreeRTOS.h"
 #include "cmsis_os2.h"
+
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "hm10.h"
@@ -129,6 +130,7 @@
 #include "trail_gui.h"
 #include "stm32h750b_discovery_lcd.h"
 #include "stm32_lcd.h"
+
 #include <string.h>
 /* USER CODE END Includes */
 
@@ -138,9 +140,10 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BLE_RX_LINE_SIZE               220U
+#define BLE_RX_LINE_SIZE 220U
 #define MPU6050_DEBUG_UPDATE_PERIOD_MS 1000U
 #define TRAIL_HUD_LCD_INSTANCE 0U
+#define TRAIL_HUD_LOADING_STAGE_COUNT 3U
 #define PHONE_RENDER_LINE_WIDTH 1U
 #define PHONE_RENDER_LINE_COLOR UTIL_LCD_COLOR_WHITE
 #define PHONE_RENDER_CLEAR_COLOR UTIL_LCD_COLOR_BLACK
@@ -162,6 +165,7 @@ const osThreadAttr_t defaultTask_attributes = {
     .stack_size = 1024 * 4,
     .priority = (osPriority_t)osPriorityNormal,
 };
+
 /* USER CODE BEGIN PV */
 static HM10_HandleTypeDef hm10;
 static MPU6050_HandleTypeDef mpu6050;
@@ -185,23 +189,10 @@ void StartDefaultTask(void* argument);
 /* USER CODE BEGIN PFP */
 static void DebugTask_ClearPhoneRenderArea(void);
 static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet);
-static uint8_t DebugTask_HandleBleRxByte(DebugTerminalMode mode,
-                                         uint8_t rx_byte,
-                                         char* ble_rx_line,
-                                         uint16_t* ble_rx_len,
-                                         uint16_t ble_rx_line_size);
-static uint8_t DebugTask_ReadBleRx(DebugTerminalMode mode,
-                                   char* ble_rx_line,
-                                   uint16_t* ble_rx_len,
-                                   uint16_t ble_rx_line_size);
-static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms,
-                                          char* ble_rx_line,
-                                          uint16_t* ble_rx_len,
-                                          uint16_t ble_rx_line_size);
-static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode,
-                                      char* ble_rx_line,
-                                      uint16_t* ble_rx_len,
-                                      uint16_t ble_rx_line_size);
+static uint8_t DebugTask_HandleBleRxByte(DebugTerminalMode mode, uint8_t rx_byte, char* ble_rx_line, uint16_t* ble_rx_len, uint16_t ble_rx_line_size);
+static uint8_t DebugTask_ReadBleRx(DebugTerminalMode mode, char* ble_rx_line, uint16_t* ble_rx_len, uint16_t ble_rx_line_size);
+static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms, char* ble_rx_line, uint16_t* ble_rx_len, uint16_t ble_rx_line_size);
+static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode, char* ble_rx_line, uint16_t* ble_rx_len, uint16_t ble_rx_line_size);
 static void DebugTask_PrintMpu6050Data(uint32_t* last_tick);
 /* USER CODE END PFP */
 
@@ -426,7 +417,6 @@ static void DebugTask_PrintMpu6050Data(uint32_t* last_tick)
 
     *last_tick = HAL_GetTick();
 }
-
 /* USER CODE END 0 */
 
 /**
@@ -460,22 +450,9 @@ int main(void)
     MX_USART3_UART_Init();
     MX_USART1_UART_Init();
     MX_I2C4_Init();
+
     /* USER CODE BEGIN 2 */
     DebugTerminal_PrintTitle(&huart3);
-
-    if (HM10_Init(&hm10, &huart1) != HM10_OK)
-    {
-        Error_Handler();
-    }
-
-    HM10_SetNameAndReset(&hm10, "Trail-Module", 1000U);
-    DebugTerminal_PrintLine(&huart3, "DEBUG: initialized HM-10 on USART1");
-
-    if (MPU6050_Init(&mpu6050, &hi2c4, MPU6050_DEFAULT_I2C_ADDRESS) != MPU6050_OK)
-    {
-        Error_Handler();
-    }
-    DebugTerminal_PrintLine(&huart3, "DEBUG: initialized MPU-6050 on I2C4");
 
     if (BSP_LCD_Init(TRAIL_HUD_LCD_INSTANCE, LCD_ORIENTATION_LANDSCAPE) != BSP_ERROR_NONE)
     {
@@ -487,6 +464,29 @@ int main(void)
     BSP_LCD_SetActiveLayer(TRAIL_HUD_LCD_INSTANCE, 0U);
     UTIL_LCD_SetFuncDriver(&LCD_Driver);
     UTIL_LCD_SetLayer(0U);
+    TrailGui_DrawLoadingScreen(TRAIL_HUD_LOADING_STAGE_COUNT);
+
+    DebugTerminal_PrintLine(&huart3, "DEBUG: initialized LCD");
+    TrailGui_ExpandLoadingBar(1U, TRAIL_HUD_LOADING_STAGE_COUNT);
+
+    if (HM10_Init(&hm10, &huart1) != HM10_OK)
+    {
+        Error_Handler();
+    }
+
+    HM10_SetNameAndReset(&hm10, "Trail-Module", 1000U);
+    DebugTerminal_PrintLine(&huart3, "DEBUG: initialized HM-10 on USART1");
+    TrailGui_ExpandLoadingBar(2U, TRAIL_HUD_LOADING_STAGE_COUNT);
+
+    if (MPU6050_Init(&mpu6050, &hi2c4, MPU6050_DEFAULT_I2C_ADDRESS) != MPU6050_OK)
+    {
+        Error_Handler();
+    }
+
+    DebugTerminal_PrintLine(&huart3, "DEBUG: initialized MPU-6050 on I2C4");
+    TrailGui_ExpandLoadingBar(3U, TRAIL_HUD_LOADING_STAGE_COUNT);
+    HAL_Delay(1000);
+
     TrailGui_DrawDefaultScreen();
     /* USER CODE END 2 */
 

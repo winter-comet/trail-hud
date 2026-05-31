@@ -2,12 +2,12 @@
 #define TRAIL_GUI_H
 
 #include <stdint.h>
+
 #include "hm10_packet.h"
 #include "mpu6050_packet.h"
 
 #ifdef __cplusplus
 extern "C" {
-
 
 #endif
 
@@ -71,6 +71,26 @@ void TrailGui_DrawDefaultScreen(void);
 void TrailGui_DrawTitleText(void);
 
 /**
+ * @brief Draws the initialization screen with an empty loading bar.
+ * @param total_stage_count Number of equal loading stages in the full
+ *                          initialization sequence. A value of 0 draws only
+ *                          the empty bar frame.
+ * @return None.
+ */
+void TrailGui_DrawLoadingScreen(uint16_t total_stage_count);
+
+/**
+ * @brief Renders the loading bar filled to the requested completed stage.
+ * @param completed_stage_count Number of completed initialization stages. Values
+ *                              greater than total_stage_count are clamped.
+ * @param total_stage_count Total number of equal loading stages in the full
+ *                          initialization sequence. A value of 0 draws an
+ *                          empty bar.
+ * @return None.
+ */
+void TrailGui_ExpandLoadingBar(uint16_t completed_stage_count, uint16_t total_stage_count);
+
+/**
  * @brief Draws a vertical divider through the center of the screen.
  * @param None.
  * @return None.
@@ -88,9 +108,7 @@ void TrailGui_DrawVerticalSplitLine(void);
  * @param color ARGB8888 LCD color value used for the corner lines.
  * @return None.
  */
-void TrailGui_DrawBoundingRectangle(TrailGui_BoundingBox bounding_box,
-                                    uint16_t corner_length_px,
-                                    uint32_t color);
+void TrailGui_DrawBoundingRectangle(TrailGui_BoundingBox bounding_box, uint16_t corner_length_px, uint32_t color);
 
 /**
  * @brief Draws a filled rounded rectangle inside the supplied bounding box.
@@ -104,9 +122,7 @@ void TrailGui_DrawBoundingRectangle(TrailGui_BoundingBox bounding_box,
  * @param color ARGB8888 LCD color value used to fill the rounded rectangle.
  * @return None.
  */
-void TrailGui_DrawRoundedRectangle(TrailGui_BoundingBox bounding_box,
-                                   uint16_t radius_px,
-                                   uint32_t color);
+void TrailGui_DrawRoundedRectangle(TrailGui_BoundingBox bounding_box, uint16_t radius_px, uint32_t color);
 
 /**
  * @brief Draws a straight line segment between two points.
@@ -117,10 +133,7 @@ void TrailGui_DrawRoundedRectangle(TrailGui_BoundingBox bounding_box,
  * @param color ARGB8888 LCD color value used to draw the line.
  * @return None.
  */
-void TrailGui_DrawLine(TrailGui_Point start,
-                       TrailGui_Point end,
-                       uint16_t width,
-                       uint32_t color);
+void TrailGui_DrawLine(TrailGui_Point start, TrailGui_Point end, uint16_t width, uint32_t color);
 
 /**
  * @brief Draws a line-only 3D cuboid representing the phone orientation.
