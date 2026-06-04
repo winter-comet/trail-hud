@@ -432,10 +432,3 @@ TrailOrientation_StatusTypeDef TrailOrientation_GetRelativeRotation(float relati
 
     return TRAIL_ORIENTATION_OK;
 }
-
-/**
- * TODO:
- * - Sync, and, if possible, increase, gyroscope and phone packet fetch frequency
- * - Compare rotation values
- * - Implement a reliable rendering algorithm within a bounding box
- */
