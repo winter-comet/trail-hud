@@ -15,6 +15,7 @@
   *
   *=============================================================================
   */
+
 /**=============================================================================
   * trail-hud hardware wiring
   * STM32H750B-DK + HM-10 AT-09 BLE + Keyestudio MPU-6050 + protoboard
@@ -56,6 +57,7 @@
   *
   *=============================================================================
   */
+
 /**=============================================================================
   * SERIAL DEBUG TERMINAL / ST-LINK VIRTUAL COM PORT
   *=============================================================================
@@ -198,11 +200,24 @@ static void DebugTask_PrintMpu6050Data(uint32_t* last_tick);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+/**
+ * @brief Fills the phone render area with the solid clear color.
+ * @param None.
+ * @return None.
+ */
 static void DebugTask_ClearPhoneRenderArea(void)
 {
     TrailGui_DrawRoundedRectangle(phone_render_bounds, 0U, PHONE_RENDER_CLEAR_COLOR);
 }
 
+/**
+ * @brief Reads a fresh MPU-6050 packet and redraws the phone orientation cuboid.
+ * @param hm10_packet Pointer to a parsed HM-10 data packet holding the phone
+ *                    orientation quaternion fields. NULL causes the function to
+ *                    return immediately without drawing. The render is also
+ *                    skipped when the HM-10 STATE pin is not asserted.
+ * @return None.
+ */
 static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
 {
     MPU6050_DataPacket mpu6050_packet;
@@ -231,6 +246,22 @@ static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
                              PHONE_RENDER_LINE_COLOR);
 }
 
+/**
+ * @brief Processes one received BLE byte and dispatches completed lines.
+ * @param mode Active debug terminal mode. Controls whether complete lines are
+ *             forwarded to the debug terminal printer.
+ * @param rx_byte The received UART byte to process. CR bytes are silently
+ *                discarded. LF bytes flush the accumulated line.
+ * @param ble_rx_line Buffer that accumulates the current line. NULL is not
+ *                    allowed.
+ * @param ble_rx_len Pointer to the number of bytes currently stored in
+ *                   ble_rx_line. NULL is not allowed. Reset to 0 on a newline
+ *                   flush or when a buffer overflow is detected.
+ * @param ble_rx_line_size Total capacity of ble_rx_line in bytes, including
+ *                         the null terminator. A value of 0 is not allowed.
+ * @return 1 when the completed line matches the expected ping reply string;
+ *         otherwise 0.
+ */
 static uint8_t DebugTask_HandleBleRxByte(DebugTerminalMode mode,
                                          uint8_t rx_byte,
                                          char* ble_rx_line,
@@ -303,6 +334,19 @@ static uint8_t DebugTask_HandleBleRxByte(DebugTerminalMode mode,
     return 0U;
 }
 
+/**
+ * @brief Drains all pending HM-10 RX bytes and dispatches completed lines.
+ * @param mode Active debug terminal mode. Forwarded to
+ *             DebugTask_HandleBleRxByte for every received byte.
+ * @param ble_rx_line Buffer that accumulates the current line. NULL is not
+ *                    allowed.
+ * @param ble_rx_len Pointer to the number of bytes currently stored in
+ *                   ble_rx_line. NULL is not allowed.
+ * @param ble_rx_line_size Total capacity of ble_rx_line in bytes, including
+ *                         the null terminator.
+ * @return 1 when at least one completed line matched the expected ping reply
+ *         during this drain; otherwise 0.
+ */
 static uint8_t DebugTask_ReadBleRx(DebugTerminalMode mode,
                                    char* ble_rx_line,
                                    uint16_t* ble_rx_len,
@@ -326,6 +370,19 @@ static uint8_t DebugTask_ReadBleRx(DebugTerminalMode mode,
     return ping_reply_received;
 }
 
+/**
+ * @brief Blocks until a ping reply is received over BLE or the timeout elapses.
+ * @param timeout_ms Maximum time to wait for a matching reply in milliseconds.
+ *                   The function yields to the RTOS scheduler between polls.
+ * @param ble_rx_line Buffer that accumulates the current line. NULL is not
+ *                    allowed.
+ * @param ble_rx_len Pointer to the number of bytes currently stored in
+ *                   ble_rx_line. NULL is not allowed.
+ * @param ble_rx_line_size Total capacity of ble_rx_line in bytes, including
+ *                         the null terminator.
+ * @return 1 when a ping reply was received before the timeout expired; 0 when
+ *         the timeout elapsed without a matching reply.
+ */
 static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms,
                                           char* ble_rx_line,
                                           uint16_t* ble_rx_len,
@@ -349,6 +406,21 @@ static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms,
     return 0U;
 }
 
+/**
+ * @brief Sends a fixed-count BLE ping sequence and reports each reply result.
+ * @param debug_mode Pointer to the active debug terminal mode. NULL is not
+ *                   allowed. Set to DEBUG_TERMINAL_MODE_WAITING after the
+ *                   full sequence completes.
+ * @param ble_rx_line Buffer that accumulates the current BLE RX line. NULL
+ *                    is not allowed. Cleared to an empty string before the
+ *                    sequence starts.
+ * @param ble_rx_len Pointer to the number of bytes currently stored in
+ *                   ble_rx_line. NULL is not allowed. Reset to 0 before the
+ *                   sequence starts.
+ * @param ble_rx_line_size Total capacity of ble_rx_line in bytes, including
+ *                         the null terminator.
+ * @return None.
+ */
 static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode,
                                       char* ble_rx_line,
                                       uint16_t* ble_rx_len,
@@ -389,6 +461,13 @@ static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode,
     DebugTerminal_PrintMode(&huart3, *debug_mode);
 }
 
+/**
+ * @brief Reads and prints MPU-6050 sensor data at a fixed periodic interval.
+ * @param last_tick Pointer to the HAL tick value recorded at the last print.
+ *                  NULL is not allowed. Updated to the current tick after each
+ *                  read attempt, whether the read succeeds or fails.
+ * @return None.
+ */
 static void DebugTask_PrintMpu6050Data(uint32_t* last_tick)
 {
     MPU6050_DataPacket packet;
@@ -485,7 +564,7 @@ int main(void)
 
     DebugTerminal_PrintLine(&huart3, "DEBUG: initialized MPU-6050 on I2C4");
     TrailGui_ExpandLoadingBar(3U, TRAIL_HUD_LOADING_STAGE_COUNT);
-    HAL_Delay(1000);
+    HAL_Delay(1000U);
 
     TrailGui_DrawDefaultScreen();
     /* USER CODE END 2 */

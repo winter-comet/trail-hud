@@ -145,7 +145,7 @@ static TrailOrientation_StatusTypeDef TrailOrientation_ConvertQuaternionToEulerD
     float siny_cosp;
     float cosy_cosp;
 
-    if ((packet == 0) || (euler_degrees == 0))
+    if ((packet == NULL) || (euler_degrees == NULL))
     {
         return TRAIL_ORIENTATION_ERROR;
     }
@@ -361,7 +361,7 @@ TrailOrientation_StatusTypeDef TrailOrientation_UpdateGyroscopeRotationFromPacke
     float y_degrees;
     float z_degrees;
 
-    if ((packet == 0) || (sensitivity_lsb_per_dps <= 0.0f) || (delta_time_seconds < 0.0f))
+    if ((packet == NULL) || (sensitivity_lsb_per_dps <= 0.0f) || (delta_time_seconds < 0.0f))
     {
         return TRAIL_ORIENTATION_ERROR;
     }
@@ -413,7 +413,7 @@ TrailOrientation_StatusTypeDef TrailOrientation_ResetGyroscopeRotation(void)
  */
 TrailOrientation_StatusTypeDef TrailOrientation_GetRelativeRotation(float relative_rotation[TRAIL_ORIENTATION_AXIS_COUNT])
 {
-    if (relative_rotation == 0)
+    if (relative_rotation == NULL)
     {
         return TRAIL_ORIENTATION_ERROR;
     }

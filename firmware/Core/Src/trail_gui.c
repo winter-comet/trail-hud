@@ -70,7 +70,7 @@ static uint8_t TrailGui_NormalizeAndClipBoundingBox(TrailGui_BoundingBox* boundi
 {
     uint16_t temp;
 
-    if (bounding_box == 0)
+    if (bounding_box == NULL)
     {
         return 0U;
     }
@@ -904,6 +904,8 @@ void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
                               uint16_t line_width,
                               uint32_t color)
 {
+
+    // Define the cuboid's vertices and edges
     static const TrailGui_Vector3 model_vertices[8] = {
         {-TRAIL_GUI_PHONE_MODEL_HALF_WIDTH, -TRAIL_GUI_PHONE_MODEL_HALF_HEIGHT, -TRAIL_GUI_PHONE_MODEL_HALF_DEPTH},
         {TRAIL_GUI_PHONE_MODEL_HALF_WIDTH, -TRAIL_GUI_PHONE_MODEL_HALF_HEIGHT, -TRAIL_GUI_PHONE_MODEL_HALF_DEPTH},
@@ -928,6 +930,7 @@ void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
         {2U, 6U},
         {3U, 7U}
     };
+
     TrailGui_Point projected_points[8];
     TrailGui_Quaternion phone_quaternion;
     TrailGui_Quaternion mpu_offset_quaternion;
@@ -953,6 +956,7 @@ void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
         return;
     }
 
+    // Define bounds
     width_px = TrailGui_GetBoundingBoxWidth(&bounding_box);
     height_px = TrailGui_GetBoundingBoxHeight(&bounding_box);
     min_dimension_px = TrailGui_MinUint16(width_px, height_px);
@@ -980,6 +984,7 @@ void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
     render_quaternion = TrailGui_QuaternionNormalize(
         TrailGui_QuaternionMultiply(TrailGui_QuaternionConjugate(mpu_offset_quaternion), phone_quaternion));
 
+    // Rotate vertices
     for (vertex_index = 0U; vertex_index < 8U; vertex_index++)
     {
         TrailGui_Vector3 rotated = TrailGui_QuaternionRotateVector(render_quaternion, model_vertices[vertex_index]);
@@ -994,6 +999,7 @@ void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
                                                                        bounding_box.y_max);
     }
 
+    // Project vertices and draw edges
     for (edge_index = 0U; edge_index < 12U; edge_index++)
     {
         TrailGui_DrawLine(projected_points[model_edges[edge_index][0]],
