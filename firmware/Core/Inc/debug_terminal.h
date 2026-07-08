@@ -22,7 +22,7 @@ extern "C" {
  * Fields:
  * - DEBUG_TERMINAL_MODE_WAITING: Terminal waits without periodic debug output.
  * - DEBUG_TERMINAL_MODE_PINGS: Terminal displays ping-related BLE debug output.
- * - DEBUG_TERMINAL_MODE_PHONE_DATA: Terminal displays parsed phone data packets
+ * - DEBUG_TERMINAL_MODE_HM10_DATA: Terminal displays parsed phone data packets
  *   received over BLE.
  * - DEBUG_TERMINAL_MODE_MPU6050_DATA: Terminal displays formatted MPU-6050
  *   accelerometer and gyroscope packets.
@@ -32,7 +32,7 @@ typedef enum
     DEBUG_TERMINAL_MODE_WAITING = 0,
     DEBUG_TERMINAL_MODE_HELP,
     DEBUG_TERMINAL_MODE_PINGS,
-    DEBUG_TERMINAL_MODE_PHONE_DATA,
+    DEBUG_TERMINAL_MODE_HM10_DATA,
     DEBUG_TERMINAL_MODE_MPU6050_DATA
 } DebugTerminalMode;
 

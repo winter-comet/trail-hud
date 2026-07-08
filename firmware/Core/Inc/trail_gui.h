@@ -64,13 +64,6 @@ void TrailGui_ClearScreen(uint32_t color);
 void TrailGui_DrawDefaultScreen(void);
 
 /**
- * @brief Draws the TRAIL-MODULE title text box.
- * @param None.
- * @return None.
- */
-void TrailGui_DrawTitleText(void);
-
-/**
  * @brief Draws the initialization screen with an empty loading bar.
  * @param total_stage_count Number of equal loading stages in the full
  *                          initialization sequence. A value of 0 draws only
@@ -89,13 +82,6 @@ void TrailGui_DrawLoadingScreen(uint16_t total_stage_count);
  * @return None.
  */
 void TrailGui_ExpandLoadingBar(uint16_t completed_stage_count, uint16_t total_stage_count);
-
-/**
- * @brief Draws a vertical divider through the center of the screen.
- * @param None.
- * @return None.
- */
-void TrailGui_DrawVerticalSplitLine(void);
 
 /**
  * @brief Draws a corner-only rectangle inside the supplied bounding box.
@@ -138,12 +124,8 @@ void TrailGui_DrawLine(TrailGui_Point start, TrailGui_Point end, uint16_t width,
 /**
  * @brief Draws a line-only 3D cuboid representing the phone orientation.
  * @param hm10_packet Parsed phone data packet. NULL is not allowed. The phone
- *                    quaternion fields are used as the main orientation source.
- * @param mpu6050_packet Latest MPU-6050 data packet. NULL is not allowed. The
- *                       accelerometer values provide board tilt compensation,
- *                       while gyroscope values add a small rate-based visual
- *                       offset because the packet does not store an integrated
- *                       absolute MPU orientation.
+ *                    quaternion fields are the sole orientation source; no
+ *                    MPU-6050 data is used.
  * @param bounding_box LCD region that contains the complete phone render.
  *                     Reversed bounds are normalized internally, and out-of-
  *                     screen bounds are clipped. The cuboid rotates around the
@@ -154,7 +136,6 @@ void TrailGui_DrawLine(TrailGui_Point start, TrailGui_Point end, uint16_t width,
  * @return None.
  */
 void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
-                              const MPU6050_DataPacket* mpu6050_packet,
                               TrailGui_BoundingBox bounding_box,
                               uint16_t line_width,
                               uint32_t color);

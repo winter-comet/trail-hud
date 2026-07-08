@@ -22,8 +22,8 @@ static const Command commands[] = {
     {"W", "WAITING", DEBUG_TERMINAL_MODE_WAITING},
     {"p", "PINGS", DEBUG_TERMINAL_MODE_PINGS},
     {"P", "PINGS", DEBUG_TERMINAL_MODE_PINGS},
-    {"d", "PHONE DATA", DEBUG_TERMINAL_MODE_PHONE_DATA},
-    {"D", "PHONE DATA", DEBUG_TERMINAL_MODE_PHONE_DATA},
+    {"d", "PHONE DATA", DEBUG_TERMINAL_MODE_HM10_DATA},
+    {"D", "PHONE DATA", DEBUG_TERMINAL_MODE_HM10_DATA},
     {"i", "GYROSCOPE DATA", DEBUG_TERMINAL_MODE_MPU6050_DATA},
     {"I", "GYROSCOPE DATA", DEBUG_TERMINAL_MODE_MPU6050_DATA},
     {NULL, NULL, DEBUG_TERMINAL_MODE_WAITING},
@@ -479,7 +479,7 @@ uint8_t DebugTerminal_HandleBleRxByte(UART_HandleTypeDef* debug_uart,
             {
                 is_ping_reply = 1U;
             }
-            else if (mode == DEBUG_TERMINAL_MODE_PHONE_DATA)
+            else if (mode == DEBUG_TERMINAL_MODE_HM10_DATA)
             {
                 DebugTerminal_ParsePhonePacket(debug_uart, rx_line);
             }
@@ -501,7 +501,7 @@ uint8_t DebugTerminal_HandleBleRxByte(UART_HandleTypeDef* debug_uart,
         *rx_len = 0U;
         rx_line[0] = '\0';
 
-        if (mode == DEBUG_TERMINAL_MODE_PHONE_DATA)
+        if (mode == DEBUG_TERMINAL_MODE_HM10_DATA)
         {
             DebugTerminal_PrintLine(debug_uart, "BLE: RX line overflow, dropped partial packet");
         }

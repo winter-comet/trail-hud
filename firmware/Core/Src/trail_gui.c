@@ -6,12 +6,13 @@
 #include <math.h>
 
 #define TRAIL_GUI_TITLE "TRAIL-HUD"
+#define TRAIL_GUI_DEVICE_CONNECTED "DEVICE IS CONNECTED"
+#define TRAIL_GUI_DEVICE_DISCONNECTED "WAITING FOR A CONNECTION"
 #define TRAIL_GUI_SPLIT_LINE_X ((TRAIL_GUI_SCREEN_WIDTH - TRAIL_GUI_LINE_WIDTH_THIN) / 2U)
 #define TRAIL_GUI_PHONE_MODEL_HALF_WIDTH 0.38f
 #define TRAIL_GUI_PHONE_MODEL_HALF_HEIGHT 0.80f
 #define TRAIL_GUI_PHONE_MODEL_HALF_DEPTH 0.055f
 #define TRAIL_GUI_PHONE_MODEL_RADIUS_RATIO 0.38f
-#define TRAIL_GUI_GYRO_OFFSET_SECONDS 0.02f
 #define TRAIL_GUI_DEG_TO_RAD 0.01745329251994329577f
 #define TRAIL_GUI_QUATERNION_EPSILON 0.000001f
 #define TRAIL_GUI_LOADING_TITLE_X 48U
@@ -29,6 +30,11 @@ typedef struct
     float y;
     float z;
 } TrailGui_Vector3;
+
+typedef struct
+{
+    float m[3][3];
+} TrailGui_Matrix3;
 
 typedef struct
 {
@@ -51,14 +57,9 @@ static int32_t TrailGui_RoundFloatToInt32(float value);
 static uint16_t TrailGui_ClampInt32ToUint16(int32_t value, uint16_t min_value, uint16_t max_value);
 static TrailGui_Quaternion TrailGui_QuaternionIdentity(void);
 static TrailGui_Quaternion TrailGui_QuaternionNormalize(TrailGui_Quaternion quaternion);
-static TrailGui_Quaternion TrailGui_QuaternionConjugate(TrailGui_Quaternion quaternion);
-static TrailGui_Quaternion TrailGui_QuaternionMultiply(TrailGui_Quaternion lhs, TrailGui_Quaternion rhs);
-static TrailGui_Vector3 TrailGui_QuaternionRotateVector(TrailGui_Quaternion quaternion, TrailGui_Vector3 vector);
+static TrailGui_Matrix3 TrailGui_QuaternionToRotationMatrix(TrailGui_Quaternion quaternion);
+static TrailGui_Vector3 TrailGui_Mat3RotateVector(const TrailGui_Matrix3* matrix, TrailGui_Vector3 vector);
 static TrailGui_Quaternion TrailGui_BuildPhoneQuaternion(const HM10_DataPacket* hm10_packet);
-static TrailGui_Quaternion TrailGui_BuildVectorToVectorQuaternion(TrailGui_Vector3 from, TrailGui_Vector3 to);
-static TrailGui_Quaternion TrailGui_BuildMpuGravityQuaternion(const MPU6050_DataPacket* mpu6050_packet);
-static TrailGui_Quaternion TrailGui_BuildMpuGyroQuaternion(const MPU6050_DataPacket* mpu6050_packet);
-static TrailGui_Quaternion TrailGui_BuildMpuOffsetQuaternion(const MPU6050_DataPacket* mpu6050_packet);
 
 /**
  * @brief Normalizes and clips a bounding box to the LCD screen area.
@@ -324,27 +325,6 @@ void TrailGui_ExpandLoadingBar(uint16_t completed_stage_count, uint16_t total_st
     {
         UTIL_LCD_FillRect(inner_x, inner_y, fill_width, inner_height, UTIL_LCD_COLOR_WHITE);
     }
-}
-
-/**
- * @brief Draws the TRAIL-MODULE title text box.
- * @param None.
- * @return None.
- */
-void TrailGui_DrawTitleText(void)
-{
-    TrailGui_BoundingBox rectangle_box = {
-        .x_min = 6U,
-        .x_max = 233U,
-        .y_min = 6U,
-        .y_max = 38U
-    };
-
-    TrailGui_DrawRoundedRectangle(rectangle_box, 5U, UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_SetFont(&Font24);
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_DisplayStringAt(12U, 12U, (uint8_t*)TRAIL_GUI_TITLE, LEFT_MODE);
 }
 
 /**
@@ -711,62 +691,6 @@ static TrailGui_Quaternion TrailGui_QuaternionNormalize(TrailGui_Quaternion quat
 }
 
 /**
- * @brief Returns the conjugate of a unit quaternion.
- * @param quaternion Quaternion to conjugate.
- * @return Quaternion conjugate.
- */
-static TrailGui_Quaternion TrailGui_QuaternionConjugate(TrailGui_Quaternion quaternion)
-{
-    quaternion.x = -quaternion.x;
-    quaternion.y = -quaternion.y;
-    quaternion.z = -quaternion.z;
-
-    return quaternion;
-}
-
-/**
- * @brief Multiplies two quaternions.
- * @param lhs Left-hand quaternion.
- * @param rhs Right-hand quaternion.
- * @return Product quaternion representing lhs followed by rhs under the
- *         library's convention.
- */
-static TrailGui_Quaternion TrailGui_QuaternionMultiply(TrailGui_Quaternion lhs, TrailGui_Quaternion rhs)
-{
-    TrailGui_Quaternion product;
-
-    product.w = (lhs.w * rhs.w) - (lhs.x * rhs.x) - (lhs.y * rhs.y) - (lhs.z * rhs.z);
-    product.x = (lhs.w * rhs.x) + (lhs.x * rhs.w) + (lhs.y * rhs.z) - (lhs.z * rhs.y);
-    product.y = (lhs.w * rhs.y) - (lhs.x * rhs.z) + (lhs.y * rhs.w) + (lhs.z * rhs.x);
-    product.z = (lhs.w * rhs.z) + (lhs.x * rhs.y) - (lhs.y * rhs.x) + (lhs.z * rhs.w);
-
-    return product;
-}
-
-/**
- * @brief Rotates one 3D vector by a quaternion.
- * @param quaternion Unit quaternion used as the rotation.
- * @param vector Vector to rotate.
- * @return Rotated vector.
- */
-static TrailGui_Vector3 TrailGui_QuaternionRotateVector(TrailGui_Quaternion quaternion, TrailGui_Vector3 vector)
-{
-    TrailGui_Quaternion vector_quaternion = {0.0f, vector.x, vector.y, vector.z};
-    TrailGui_Quaternion rotated_quaternion;
-    TrailGui_Vector3 rotated_vector;
-
-    rotated_quaternion = TrailGui_QuaternionMultiply(
-        TrailGui_QuaternionMultiply(quaternion, vector_quaternion),
-        TrailGui_QuaternionConjugate(quaternion));
-
-    rotated_vector.x = rotated_quaternion.x;
-    rotated_vector.y = rotated_quaternion.y;
-    rotated_vector.z = rotated_quaternion.z;
-
-    return rotated_vector;
-}
-
-/**
  * @brief Builds the phone orientation quaternion from one HM-10 packet.
  * @param hm10_packet Parsed phone packet. NULL is not allowed.
  * @return Normalized phone quaternion, or identity when the packet values are
@@ -785,110 +709,75 @@ static TrailGui_Quaternion TrailGui_BuildPhoneQuaternion(const HM10_DataPacket* 
 }
 
 /**
- * @brief Builds a quaternion that rotates one unit vector into another.
- * @param from Source unit vector.
- * @param to Destination unit vector.
- * @return Quaternion that maps from to to, or a stable 180-degree fallback when
- *         the vectors point in opposite directions.
+ * @brief Converts a unit quaternion into an equivalent 3x3 rotation matrix.
+ * @param quaternion Unit quaternion to convert; need not be pre-normalized.
+ * @return Rotation matrix equivalent to quaternion, computed once so it can be
+ *         reused across multiple vector rotations without repeating
+ *         quaternion algebra per vertex.
  */
-static TrailGui_Quaternion TrailGui_BuildVectorToVectorQuaternion(TrailGui_Vector3 from, TrailGui_Vector3 to)
+static TrailGui_Matrix3 TrailGui_QuaternionToRotationMatrix(TrailGui_Quaternion quaternion)
 {
-    TrailGui_Quaternion quaternion;
-    float dot = (from.x * to.x) + (from.y * to.y) + (from.z * to.z);
+    TrailGui_Matrix3 matrix;
+    float xx;
+    float yy;
+    float zz;
+    float xy;
+    float xz;
+    float yz;
+    float wx;
+    float wy;
+    float wz;
 
-    if (dot < -0.9999f)
-    {
-        quaternion.w = 0.0f;
-        quaternion.x = 1.0f;
-        quaternion.y = 0.0f;
-        quaternion.z = 0.0f;
-        return quaternion;
-    }
+    quaternion = TrailGui_QuaternionNormalize(quaternion);
 
-    quaternion.w = 1.0f + dot;
-    quaternion.x = (from.y * to.z) - (from.z * to.y);
-    quaternion.y = (from.z * to.x) - (from.x * to.z);
-    quaternion.z = (from.x * to.y) - (from.y * to.x);
+    xx = quaternion.x * quaternion.x;
+    yy = quaternion.y * quaternion.y;
+    zz = quaternion.z * quaternion.z;
+    xy = quaternion.x * quaternion.y;
+    xz = quaternion.x * quaternion.z;
+    yz = quaternion.y * quaternion.z;
+    wx = quaternion.w * quaternion.x;
+    wy = quaternion.w * quaternion.y;
+    wz = quaternion.w * quaternion.z;
 
-    return TrailGui_QuaternionNormalize(quaternion);
+    matrix.m[0][0] = 1.0f - (2.0f * (yy + zz));
+    matrix.m[0][1] = 2.0f * (xy - wz);
+    matrix.m[0][2] = 2.0f * (xz + wy);
+
+    matrix.m[1][0] = 2.0f * (xy + wz);
+    matrix.m[1][1] = 1.0f - (2.0f * (xx + zz));
+    matrix.m[1][2] = 2.0f * (yz - wx);
+
+    matrix.m[2][0] = 2.0f * (xz - wy);
+    matrix.m[2][1] = 2.0f * (yz + wx);
+    matrix.m[2][2] = 1.0f - (2.0f * (xx + yy));
+
+    return matrix;
 }
 
 /**
- * @brief Builds a board tilt quaternion from the MPU-6050 acceleration vector.
- * @param mpu6050_packet Latest MPU-6050 packet. NULL is not allowed.
- * @return Quaternion that approximately maps the board gravity vector back to
- *         the default +Z gravity direction, or identity when acceleration is too
- *         small to use.
+ * @brief Rotates one 3D vector by a precomputed rotation matrix.
+ * @param matrix Rotation matrix built by TrailGui_QuaternionToRotationMatrix;
+ *               NULL is not allowed.
+ * @param vector Vector to rotate.
+ * @return Rotated vector.
  */
-static TrailGui_Quaternion TrailGui_BuildMpuGravityQuaternion(const MPU6050_DataPacket* mpu6050_packet)
+static TrailGui_Vector3 TrailGui_Mat3RotateVector(const TrailGui_Matrix3* matrix, TrailGui_Vector3 vector)
 {
-    TrailGui_Vector3 measured_gravity;
-    TrailGui_Vector3 reference_gravity = {0.0f, 0.0f, 1.0f};
-    float length_squared;
-    float inv_length;
+    TrailGui_Vector3 rotated;
 
-    measured_gravity.x = mpu6050_packet->accel_x_g;
-    measured_gravity.y = mpu6050_packet->accel_y_g;
-    measured_gravity.z = mpu6050_packet->accel_z_g;
+    rotated.x = (matrix->m[0][0] * vector.x) + (matrix->m[0][1] * vector.y) + (matrix->m[0][2] * vector.z);
+    rotated.y = (matrix->m[1][0] * vector.x) + (matrix->m[1][1] * vector.y) + (matrix->m[1][2] * vector.z);
+    rotated.z = (matrix->m[2][0] * vector.x) + (matrix->m[2][1] * vector.y) + (matrix->m[2][2] * vector.z);
 
-    length_squared = (measured_gravity.x * measured_gravity.x) +
-        (measured_gravity.y * measured_gravity.y) +
-        (measured_gravity.z * measured_gravity.z);
-
-    if (length_squared <= TRAIL_GUI_QUATERNION_EPSILON)
-    {
-        return TrailGui_QuaternionIdentity();
-    }
-
-    inv_length = 1.0f / sqrtf(length_squared);
-    measured_gravity.x *= inv_length;
-    measured_gravity.y *= inv_length;
-    measured_gravity.z *= inv_length;
-
-    return TrailGui_BuildVectorToVectorQuaternion(measured_gravity, reference_gravity);
-}
-
-/**
- * @brief Builds a small rate-based MPU-6050 gyroscope offset quaternion.
- * @param mpu6050_packet Latest MPU-6050 packet. NULL is not allowed.
- * @return Small normalized quaternion derived from the current angular velocity.
- */
-static TrailGui_Quaternion TrailGui_BuildMpuGyroQuaternion(const MPU6050_DataPacket* mpu6050_packet)
-{
-    TrailGui_Quaternion quaternion;
-    float half_step = 0.5f * TRAIL_GUI_GYRO_OFFSET_SECONDS * TRAIL_GUI_DEG_TO_RAD;
-
-    quaternion.w = 1.0f;
-    quaternion.x = mpu6050_packet->gyro_x_dps * half_step;
-    quaternion.y = mpu6050_packet->gyro_y_dps * half_step;
-    quaternion.z = mpu6050_packet->gyro_z_dps * half_step;
-
-    return TrailGui_QuaternionNormalize(quaternion);
-}
-
-/**
- * @brief Builds the approximate MPU-6050 board-offset quaternion.
- * @param mpu6050_packet Latest MPU-6050 packet. NULL is not allowed.
- * @return Normalized quaternion combining gravity tilt compensation with a
- *         small gyroscope-rate offset.
- */
-static TrailGui_Quaternion TrailGui_BuildMpuOffsetQuaternion(const MPU6050_DataPacket* mpu6050_packet)
-{
-    TrailGui_Quaternion gravity_quaternion = TrailGui_BuildMpuGravityQuaternion(mpu6050_packet);
-    TrailGui_Quaternion gyro_quaternion = TrailGui_BuildMpuGyroQuaternion(mpu6050_packet);
-
-    return TrailGui_QuaternionNormalize(TrailGui_QuaternionMultiply(gyro_quaternion, gravity_quaternion));
+    return rotated;
 }
 
 /**
  * @brief Draws a line-only 3D cuboid representing the phone orientation.
  * @param hm10_packet Parsed phone data packet. NULL is not allowed. The phone
- *                    quaternion fields are used as the main orientation source.
- * @param mpu6050_packet Latest MPU-6050 data packet. NULL is not allowed. The
- *                       accelerometer values provide board tilt compensation,
- *                       while gyroscope values add a small rate-based visual
- *                       offset because the packet does not store an integrated
- *                       absolute MPU orientation.
+ *                    quaternion fields are the sole orientation source; no
+ *                    MPU-6050 data is used.
  * @param bounding_box LCD region that contains the complete phone render.
  *                     Reversed bounds are normalized internally, and out-of-
  *                     screen bounds are clipped. The cuboid rotates around the
@@ -899,13 +788,10 @@ static TrailGui_Quaternion TrailGui_BuildMpuOffsetQuaternion(const MPU6050_DataP
  * @return None.
  */
 void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
-                              const MPU6050_DataPacket* mpu6050_packet,
                               TrailGui_BoundingBox bounding_box,
                               uint16_t line_width,
                               uint32_t color)
 {
-
-    // Define the cuboid's vertices and edges
     static const TrailGui_Vector3 model_vertices[8] = {
         {-TRAIL_GUI_PHONE_MODEL_HALF_WIDTH, -TRAIL_GUI_PHONE_MODEL_HALF_HEIGHT, -TRAIL_GUI_PHONE_MODEL_HALF_DEPTH},
         {TRAIL_GUI_PHONE_MODEL_HALF_WIDTH, -TRAIL_GUI_PHONE_MODEL_HALF_HEIGHT, -TRAIL_GUI_PHONE_MODEL_HALF_DEPTH},
@@ -917,24 +803,13 @@ void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
         {-TRAIL_GUI_PHONE_MODEL_HALF_WIDTH, TRAIL_GUI_PHONE_MODEL_HALF_HEIGHT, TRAIL_GUI_PHONE_MODEL_HALF_DEPTH}
     };
     static const uint8_t model_edges[12][2] = {
-        {0U, 1U},
-        {1U, 2U},
-        {2U, 3U},
-        {3U, 0U},
-        {4U, 5U},
-        {5U, 6U},
-        {6U, 7U},
-        {7U, 4U},
-        {0U, 4U},
-        {1U, 5U},
-        {2U, 6U},
-        {3U, 7U}
+        {0U, 1U}, {1U, 2U}, {2U, 3U}, {3U, 0U},
+        {4U, 5U}, {5U, 6U}, {6U, 7U}, {7U, 4U},
+        {0U, 4U}, {1U, 5U}, {2U, 6U}, {3U, 7U}
     };
-
     TrailGui_Point projected_points[8];
     TrailGui_Quaternion phone_quaternion;
-    TrailGui_Quaternion mpu_offset_quaternion;
-    TrailGui_Quaternion render_quaternion;
+    TrailGui_Matrix3 render_matrix;
     uint16_t width_px;
     uint16_t height_px;
     uint16_t min_dimension_px;
@@ -946,7 +821,7 @@ void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
     uint8_t vertex_index;
     uint8_t edge_index;
 
-    if ((hm10_packet == 0) || (mpu6050_packet == 0) || (line_width == 0U))
+    if ((hm10_packet == 0) || (line_width == 0U))
     {
         return;
     }
@@ -956,7 +831,6 @@ void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
         return;
     }
 
-    // Define bounds
     width_px = TrailGui_GetBoundingBoxWidth(&bounding_box);
     height_px = TrailGui_GetBoundingBoxHeight(&bounding_box);
     min_dimension_px = TrailGui_MinUint16(width_px, height_px);
@@ -966,9 +840,14 @@ void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
         return;
     }
 
-    model_radius = sqrtf((TRAIL_GUI_PHONE_MODEL_HALF_WIDTH * TRAIL_GUI_PHONE_MODEL_HALF_WIDTH) +
-        (TRAIL_GUI_PHONE_MODEL_HALF_HEIGHT * TRAIL_GUI_PHONE_MODEL_HALF_HEIGHT) +
-        (TRAIL_GUI_PHONE_MODEL_HALF_DEPTH * TRAIL_GUI_PHONE_MODEL_HALF_DEPTH));
+    /* model_radius is a compile-time-constant geometric property of the fixed
+     * model_vertices, so it is precomputed once instead of recomputed every
+     * call. */
+    static const float model_radius_const =
+        TRAIL_GUI_PHONE_MODEL_HALF_WIDTH * TRAIL_GUI_PHONE_MODEL_HALF_WIDTH
+        + TRAIL_GUI_PHONE_MODEL_HALF_HEIGHT * TRAIL_GUI_PHONE_MODEL_HALF_HEIGHT
+        + TRAIL_GUI_PHONE_MODEL_HALF_DEPTH * TRAIL_GUI_PHONE_MODEL_HALF_DEPTH;
+    model_radius = sqrtf(model_radius_const);
     pixel_radius = ((float)min_dimension_px * TRAIL_GUI_PHONE_MODEL_RADIUS_RATIO) - (float)line_width - 2.0f;
 
     if ((model_radius <= TRAIL_GUI_QUATERNION_EPSILON) || (pixel_radius <= 0.0f))
@@ -979,15 +858,13 @@ void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
     scale = pixel_radius / model_radius;
     center_x = (float)bounding_box.x_min + (((float)width_px - 1.0f) * 0.5f);
     center_y = (float)bounding_box.y_min + (((float)height_px - 1.0f) * 0.5f);
-    phone_quaternion = TrailGui_BuildPhoneQuaternion(hm10_packet);
-    mpu_offset_quaternion = TrailGui_BuildMpuOffsetQuaternion(mpu6050_packet);
-    render_quaternion = TrailGui_QuaternionNormalize(
-        TrailGui_QuaternionMultiply(TrailGui_QuaternionConjugate(mpu_offset_quaternion), phone_quaternion));
 
-    // Rotate vertices
+    phone_quaternion = TrailGui_BuildPhoneQuaternion(hm10_packet);
+    render_matrix = TrailGui_QuaternionToRotationMatrix(phone_quaternion);
+
     for (vertex_index = 0U; vertex_index < 8U; vertex_index++)
     {
-        TrailGui_Vector3 rotated = TrailGui_QuaternionRotateVector(render_quaternion, model_vertices[vertex_index]);
+        TrailGui_Vector3 rotated = TrailGui_Mat3RotateVector(&render_matrix, model_vertices[vertex_index]);
         int32_t screen_x = TrailGui_RoundFloatToInt32(center_x + (rotated.x * scale));
         int32_t screen_y = TrailGui_RoundFloatToInt32(center_y - (rotated.y * scale));
 
@@ -999,7 +876,6 @@ void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
                                                                        bounding_box.y_max);
     }
 
-    // Project vertices and draw edges
     for (edge_index = 0U; edge_index < 12U; edge_index++)
     {
         TrailGui_DrawLine(projected_points[model_edges[edge_index][0]],
@@ -1016,24 +892,34 @@ void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
  */
 void TrailGui_DrawDefaultScreen(void)
 {
-    TrailGui_BoundingBox menu_widget_bounds = {
+    TrailGui_BoundingBox olive_background = {
         .x_min = 0U,
         .x_max = 239U,
         .y_min = 0U,
         .y_max = 272U
     };
-    TrailGui_BoundingBox path_widget_bounds = {
+
+    TrailGui_BoundingBox title_bounds = {
+        .x_min = 6U,
+        .x_max = 233U,
+        .y_min = 6U,
+        .y_max = 38U
+    };
+
+    TrailGui_BoundingBox gyroscope_background = {
         .x_min = 6U,
         .x_max = 233U,
         .y_min = 44U,
         .y_max = 265U
     };
-    TrailGui_Point start_point = {223U, 54U};
-    TrailGui_Point end_point = {16U, 255U};
 
     TrailGui_ClearScreen(UTIL_LCD_COLOR_BLACK);
-    TrailGui_DrawRoundedRectangle(menu_widget_bounds, 5U, TRAIL_GUI_COLOR_LIGHT_OLIVE);
-    TrailGui_DrawRoundedRectangle(path_widget_bounds, 5U, UTIL_LCD_COLOR_WHITE);
-    TrailGui_DrawTitleText();
-    TrailGui_DrawLine(start_point, end_point, TRAIL_GUI_LINE_WIDTH_THIN, UTIL_LCD_COLOR_BLACK);
+    TrailGui_DrawRoundedRectangle(olive_background, 5U, TRAIL_GUI_COLOR_LIGHT_OLIVE);
+    TrailGui_DrawRoundedRectangle(gyroscope_background, 5U, UTIL_LCD_COLOR_WHITE);
+
+    TrailGui_DrawRoundedRectangle(title_bounds, 5U, UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_SetFont(&Font24);
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
+    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_DisplayStringAt(12U, 12U, (uint8_t*)TRAIL_GUI_TITLE, LEFT_MODE);
 }

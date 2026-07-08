@@ -17,7 +17,6 @@
   */
 
 
-
 /**=============================================================================
   * trail-hud hardware wiring
   * STM32H750B-DK + HM-10 AT-09 BLE + Keyestudio MPU-6050 + protoboard
@@ -59,7 +58,6 @@
   *
   *=============================================================================
   */
-
 
 
 /**=============================================================================
@@ -162,18 +160,19 @@ I2C_HandleTypeDef hi2c4;
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart3;
 
-/* Definitions for defaultTask */
-osThreadId_t defaultTaskHandle;
-const osThreadAttr_t defaultTask_attributes = {
-    .name = "defaultTask",
-    .stack_size = 1024 * 4,
-    .priority = (osPriority_t)osPriorityNormal,
-};
-
 /* USER CODE BEGIN PV */
 static HM10_HandleTypeDef hm10;
 static MPU6050_HandleTypeDef mpu6050;
-osSemaphoreId_t hm10_packet;
+
+osSemaphoreId_t hm10TopLED;
+osSemaphoreId_t hm10BottomLED;
+osMessageQueueId_t hm10RxQueue;
+
+static uint8_t hm10_uart_rx_byte;
+static char hm10_isr_line[BLE_RX_LINE_SIZE];
+static uint16_t hm10_isr_line_len = 0U;
+static volatile uint8_t hm10_ping_reply_flag = 0U;
+
 static const LED_HandleTypeDef led_handles[LED_HANDLE_COUNT] = {
     {GPIOD, GPIO_PIN_3, GPIO_PIN_RESET},
     {GPIOJ, GPIO_PIN_2, GPIO_PIN_SET},
@@ -185,11 +184,17 @@ static const TrailGui_BoundingBox phone_render_bounds = {
     .y_min = 0U,
     .y_max = (TRAIL_GUI_SCREEN_HEIGHT - 1U)
 };
-static const TrailGui_BoundingBox compass_bounds = {
-    .x_min = 6U,
-    .x_max = 233U,
-    .y_min = 44U,
-    .y_max = 265U
+
+const osThreadAttr_t MainThread_attributes = {
+    .name = "MainThread",
+    .stack_size = 1024 * 4,
+    .priority = (osPriority_t)osPriorityNormal,
+};
+
+const osThreadAttr_t HM10Thread_attributes = {
+    .name = "HM10Thread",
+    .stack_size = 1024 * 4,
+    .priority = (osPriority_t)osPriorityNormal,
 };
 /* USER CODE END PV */
 
@@ -200,24 +205,21 @@ static void MX_GPIO_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_I2C4_Init(void);
-void StartDefaultTask(void* argument);
+void MainThread(void* argument);
 
 /* USER CODE BEGIN PFP */
 static void DebugTask_ClearPhoneRenderArea(void);
 static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet);
-static uint8_t DebugTask_HandleBleRxByte(DebugTerminalMode mode, uint8_t rx_byte, char* ble_rx_line, uint16_t* ble_rx_len, uint16_t ble_rx_line_size);
-static uint8_t DebugTask_ReadBleRx(DebugTerminalMode mode, char* ble_rx_line, uint16_t* ble_rx_len, uint16_t ble_rx_line_size);
-static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms, char* ble_rx_line, uint16_t* ble_rx_len, uint16_t ble_rx_line_size);
-static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode, char* ble_rx_line, uint16_t* ble_rx_len, uint16_t ble_rx_line_size);
+static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms);
+static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode);
 static void DebugTask_PrintMpu6050Data(uint32_t* last_tick);
-static void DebugTask_RenderCompass(uint32_t* last_tick);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
 /**
- * @brief Toggles a LED sequence.
+ * @brief Toggles a LED sequence, in the same order as is defined in the led_handles array.
  * @param None.
  * @return None.
  */
@@ -261,8 +263,6 @@ static void DebugTask_ClearPhoneRenderArea(void)
  */
 static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
 {
-    MPU6050_DataPacket mpu6050_packet;
-
     if (hm10_packet == NULL)
     {
         return;
@@ -273,171 +273,30 @@ static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
         return;
     }
 
-    if (MPU6050_ReadDataPacket(&mpu6050, &mpu6050_packet) != MPU6050_OK)
-    {
-        DebugTerminal_PrintLine(&huart3, "MPU-6050: read failed during phone render");
-        return;
-    }
-
     DebugTask_ClearPhoneRenderArea();
     TrailGui_DrawPhoneCuboid(hm10_packet,
-                             &mpu6050_packet,
                              phone_render_bounds,
                              PHONE_RENDER_LINE_WIDTH,
                              PHONE_RENDER_LINE_COLOR);
 }
 
 /**
- * @brief Processes one received BLE byte and dispatches completed lines.
- * @param mode Active debug terminal mode. Controls whether complete lines are
- *             forwarded to the debug terminal printer.
- * @param rx_byte The received UART byte to process. CR bytes are silently
- *                discarded. LF bytes flush the accumulated line.
- * @param ble_rx_line Buffer that accumulates the current line. NULL is not
- *                    allowed.
- * @param ble_rx_len Pointer to the number of bytes currently stored in
- *                   ble_rx_line. NULL is not allowed. Reset to 0 on a newline
- *                   flush or when a buffer overflow is detected.
- * @param ble_rx_line_size Total capacity of ble_rx_line in bytes, including
- *                         the null terminator. A value of 0 is not allowed.
- * @return 1 when the completed line matches the expected ping reply string;
- *         otherwise 0.
- */
-static uint8_t DebugTask_HandleBleRxByte(DebugTerminalMode mode,
-                                         uint8_t rx_byte,
-                                         char* ble_rx_line,
-                                         uint16_t* ble_rx_len,
-                                         uint16_t ble_rx_line_size)
-{
-    uint8_t is_ping_reply = 0U;
-
-    if ((ble_rx_line == NULL) || (ble_rx_len == NULL) || (ble_rx_line_size == 0U))
-    {
-        return 0U;
-    }
-
-    if (rx_byte == '\r')
-    {
-        return 0U;
-    }
-
-    if (rx_byte == '\n')
-    {
-        ble_rx_line[*ble_rx_len] = '\0';
-
-        if (*ble_rx_len > 0U)
-        {
-            if (strcmp(ble_rx_line, DEBUG_TERMINAL_PING_REPLY) == 0)
-            {
-                is_ping_reply = 1U;
-            }
-            else
-            {
-                HM10_DataPacket hm10_packet;
-
-                if (HM10_ParseDataPacket(ble_rx_line, &hm10_packet) != 0U)
-                {
-                    DebugTask_RenderPhoneFrame(&hm10_packet);
-
-                    if (mode == DEBUG_TERMINAL_MODE_PHONE_DATA)
-                    {
-                        DebugTerminal_ParsePhonePacket(&huart3, ble_rx_line);
-                    }
-                }
-                else if (mode == DEBUG_TERMINAL_MODE_PHONE_DATA)
-                {
-                    DebugTerminal_ParsePhonePacket(&huart3, ble_rx_line);
-                }
-            }
-        }
-
-        *ble_rx_len = 0U;
-        ble_rx_line[0] = '\0';
-        return is_ping_reply;
-    }
-
-    if (*ble_rx_len < (uint16_t)(ble_rx_line_size - 1U))
-    {
-        ble_rx_line[*ble_rx_len] = (char)rx_byte;
-        (*ble_rx_len)++;
-    }
-    else
-    {
-        *ble_rx_len = 0U;
-        ble_rx_line[0] = '\0';
-
-        if (mode == DEBUG_TERMINAL_MODE_PHONE_DATA)
-        {
-            DebugTerminal_PrintLine(&huart3, "BLE: RX line overflow, dropped partial packet");
-        }
-    }
-
-    return 0U;
-}
-
-/**
- * @brief Drains all pending HM-10 RX bytes and dispatches completed lines.
- * @param mode Active debug terminal mode. Forwarded to
- *             DebugTask_HandleBleRxByte for every received byte.
- * @param ble_rx_line Buffer that accumulates the current line. NULL is not
- *                    allowed.
- * @param ble_rx_len Pointer to the number of bytes currently stored in
- *                   ble_rx_line. NULL is not allowed.
- * @param ble_rx_line_size Total capacity of ble_rx_line in bytes, including
- *                         the null terminator.
- * @return 1 when at least one completed line matched the expected ping reply
- *         during this drain; otherwise 0.
- */
-static uint8_t DebugTask_ReadBleRx(DebugTerminalMode mode,
-                                   char* ble_rx_line,
-                                   uint16_t* ble_rx_len,
-                                   uint16_t ble_rx_line_size)
-{
-    uint8_t rx_byte = 0U;
-    uint8_t ping_reply_received = 0U;
-
-    while (HM10_ReadByte(&hm10, &rx_byte, 1U) == HM10_OK)
-    {
-        if (DebugTask_HandleBleRxByte(mode,
-                                      rx_byte,
-                                      ble_rx_line,
-                                      ble_rx_len,
-                                      ble_rx_line_size) != 0U)
-        {
-            ping_reply_received = 1U;
-        }
-    }
-
-    return ping_reply_received;
-}
-
-/**
  * @brief Blocks until a ping reply is received over BLE or the timeout elapses.
  * @param timeout_ms Maximum time to wait for a matching reply in milliseconds.
  *                   The function yields to the RTOS scheduler between polls.
- * @param ble_rx_line Buffer that accumulates the current line. NULL is not
- *                    allowed.
- * @param ble_rx_len Pointer to the number of bytes currently stored in
- *                   ble_rx_line. NULL is not allowed.
- * @param ble_rx_line_size Total capacity of ble_rx_line in bytes, including
- *                         the null terminator.
  * @return 1 when a ping reply was received before the timeout expired; 0 when
  *         the timeout elapsed without a matching reply.
  */
-static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms,
-                                          char* ble_rx_line,
-                                          uint16_t* ble_rx_len,
-                                          uint16_t ble_rx_line_size)
+static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms)
 {
     uint32_t start_tick = HAL_GetTick();
+    hm10_ping_reply_flag = 0U;
 
     while ((HAL_GetTick() - start_tick) < timeout_ms)
     {
-        if (DebugTask_ReadBleRx(DEBUG_TERMINAL_MODE_PINGS,
-                                ble_rx_line,
-                                ble_rx_len,
-                                ble_rx_line_size) != 0U)
+        if (hm10_ping_reply_flag != 0U)
         {
+            hm10_ping_reply_flag = 0U;
             return 1U;
         }
 
@@ -452,34 +311,13 @@ static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms,
  * @param debug_mode Pointer to the active debug terminal mode. NULL is not
  *                   allowed. Set to DEBUG_TERMINAL_MODE_WAITING after the
  *                   full sequence completes.
- * @param ble_rx_line Buffer that accumulates the current BLE RX line. NULL
- *                    is not allowed. Cleared to an empty string before the
- *                    sequence starts.
- * @param ble_rx_len Pointer to the number of bytes currently stored in
- *                   ble_rx_line. NULL is not allowed. Reset to 0 before the
- *                   sequence starts.
- * @param ble_rx_line_size Total capacity of ble_rx_line in bytes, including
- *                         the null terminator.
  * @return None.
  */
-static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode,
-                                      char* ble_rx_line,
-                                      uint16_t* ble_rx_len,
-                                      uint16_t ble_rx_line_size)
+static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode)
 {
-    uint8_t ping_index;
-
-    if ((debug_mode == NULL) || (ble_rx_line == NULL) || (ble_rx_len == NULL))
-    {
-        return;
-    }
-
-    *ble_rx_len = 0U;
-    ble_rx_line[0] = '\0';
-
     DebugTerminal_PrintLine(&huart3, "BLE: pinging phone with 4 packets of data");
 
-    for (ping_index = 0U; ping_index < DEBUG_TERMINAL_PING_COUNT; ping_index++)
+    for (uint8_t ping_index = 0U; ping_index < DEBUG_TERMINAL_PING_COUNT; ping_index++)
     {
         uint8_t reply_received = 0U;
 
@@ -487,15 +325,12 @@ static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode,
         {
             if (HM10_SendString(&hm10, DEBUG_TERMINAL_PING_PACKET "\r\n") == HM10_OK)
             {
-                reply_received = DebugTask_WaitForPingReply(DEBUG_TERMINAL_PING_TIMEOUT_MS,
-                                                            ble_rx_line,
-                                                            ble_rx_len,
-                                                            ble_rx_line_size);
+                reply_received = DebugTask_WaitForPingReply(DEBUG_TERMINAL_PING_TIMEOUT_MS);
             }
         }
 
-        DebugTerminal_PrintLine(&huart3,
-                                (reply_received != 0U) ? "BLE: reply from phone" : "BLE: no reply");
+        DebugTerminal_PrintLine(&huart3, (reply_received != 0U) ? "BLE: reply from phone" : "BLE: no reply");
+        osDelay(500U);
     }
 
     *debug_mode = DEBUG_TERMINAL_MODE_WAITING;
@@ -538,11 +373,117 @@ static void DebugTask_PrintMpu6050Data(uint32_t* last_tick)
     *last_tick = HAL_GetTick();
 }
 
-void LED_HM10PacketReceived()
+/**
+ * @brief Toggles the top green LED (PD3) for 100ms when a semaphore token is available.
+ * @param argument Does not impact the result.
+ * @return None.
+ */
+void HM10_TopLEDThread(void* argument)
 {
     while (1)
     {
+        osSemaphoreAcquire(hm10TopLED, osWaitForever);
+        HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_3);
+        osDelay(100);
+        HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_3);
+    }
+}
 
+/**
+ * @brief Toggles the bottom green LED (PJ2) for 100ms when a semaphore token is available.
+ * @param argument Does not impact the result.
+ * @return None.
+ */
+void HM10_BottomLEDThread(void* argument)
+{
+    while (1)
+    {
+        osSemaphoreAcquire(hm10BottomLED, osWaitForever);
+        HAL_GPIO_TogglePin(GPIOJ, GPIO_PIN_2);
+        osDelay(100);
+        HAL_GPIO_TogglePin(GPIOJ, GPIO_PIN_2);
+    }
+}
+
+/**
+ * @brief Calls functions, related to BLE packet processing, whenever there are packets in the queue.
+ * @param argument Does not impact the result.
+ * @return None.
+ */
+void HM10_Thread(void* argument)
+{
+    HM10_DataPacket packet;
+
+    while (1)
+    {
+        // Wait until next HM10 data packet is parsed and enqueued
+        osMessageQueueGet(hm10RxQueue, &packet, NULL, osWaitForever);
+
+        // Run the algorithm
+        DebugTask_RenderPhoneFrame(&packet);
+    }
+}
+
+/**
+ * @brief The core thread.
+ * @param argument Does not impact the result.
+ * @return None.
+ */
+void MainThread(void* argument)
+{
+    GPIO_PinState last_state;
+    DebugTerminalMode debug_mode = DEBUG_TERMINAL_MODE_WAITING;
+    uint32_t last_mpu6050_tick = HAL_GetTick() - MPU6050_DEBUG_UPDATE_PERIOD_MS;
+
+    (void)argument;
+
+    DebugTerminal_PrintMode(&huart3, debug_mode);
+
+    last_state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
+    DebugTerminal_PrintLine(&huart3,
+                            (last_state == GPIO_PIN_SET)
+                                ? "BLE: connection established"
+                                : "BLE: connection terminated");
+
+    if (last_state != GPIO_PIN_SET)
+    {
+        DebugTask_ClearPhoneRenderArea();
+    }
+
+    while (1)
+    {
+        GPIO_PinState state;
+
+        state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
+        DebugTerminal_HandleInput(&huart3, &debug_mode);
+
+        if (debug_mode == DEBUG_TERMINAL_MODE_PINGS)
+        {
+            DebugTask_RunPingSequence(&debug_mode);
+            osDelay(1U);
+            continue;
+        }
+
+        if (state != last_state)
+        {
+            last_state = state;
+            DebugTerminal_PrintLine(&huart3,
+                                    (state == GPIO_PIN_SET)
+                                        ? "BLE: connection established"
+                                        : "BLE: connection terminated");
+
+            if (state != GPIO_PIN_SET)
+            {
+                DebugTask_ClearPhoneRenderArea();
+            }
+        }
+
+        if (debug_mode == DEBUG_TERMINAL_MODE_MPU6050_DATA)
+        {
+            DebugTask_PrintMpu6050Data(&last_mpu6050_tick);
+        }
+
+        osDelay(1U);
     }
 }
 /* USER CODE END 0 */
@@ -609,6 +550,9 @@ int main(void)
         Error_Handler();
     }
 
+    HAL_NVIC_SetPriority(USART1_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(USART1_IRQn);
+
     DebugTerminal_PrintLine(&huart3, "DEBUG: initialized HM-10 on USART1");
     TrailGui_ExpandLoadingBar(2U, TRAIL_HUD_LOADING_STAGE_COUNT);
 
@@ -655,7 +599,8 @@ int main(void)
     /* USER CODE END RTOS_MUTEX */
 
     /* USER CODE BEGIN RTOS_SEMAPHORES */
-    hm10_packet = osSemaphoreNew(1, 0, NULL);
+    hm10TopLED = osSemaphoreNew(1, 0, NULL);
+    hm10BottomLED = osSemaphoreNew(1, 0, NULL);
     /* USER CODE END RTOS_SEMAPHORES */
 
     /* USER CODE BEGIN RTOS_TIMERS */
@@ -663,15 +608,15 @@ int main(void)
     /* USER CODE END RTOS_TIMERS */
 
     /* USER CODE BEGIN RTOS_QUEUES */
-    /* add queues, ... */
+    hm10RxQueue = osMessageQueueNew(16, sizeof(HM10_DataPacket), NULL);
+    HAL_UART_Receive_IT(&huart1, &hm10_uart_rx_byte, 1U);
     /* USER CODE END RTOS_QUEUES */
 
-    /* Create the thread(s) */
-    /* creation of defaultTask */
-    defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
-
     /* USER CODE BEGIN RTOS_THREADS */
-    osThreadNew(LED_HM10PacketReceived, NULL, NULL);
+    osThreadNew(HM10_TopLEDThread, NULL, NULL);
+    osThreadNew(HM10_BottomLEDThread, NULL, NULL);
+    osThreadNew(HM10_Thread, NULL, &HM10Thread_attributes);
+    osThreadNew(MainThread, NULL, &MainThread_attributes);
     /* USER CODE END RTOS_THREADS */
 
     /* USER CODE BEGIN RTOS_EVENTS */
@@ -927,84 +872,69 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-/* USER CODE END 4 */
-
-/* USER CODE BEGIN Header_StartDefaultTask */
-/**
-  * @brief  Function implementing the defaultTask thread.
-  * @param  argument: Not used
-  * @retval None
-  */
-/* USER CODE END Header_StartDefaultTask */
-void StartDefaultTask(void* argument)
+void HAL_UART_ErrorCallback(UART_HandleTypeDef* huart)
 {
-    /* USER CODE BEGIN 5 */
-    char ble_rx_line[BLE_RX_LINE_SIZE] = {0};
-    uint16_t ble_rx_len = 0U;
-    GPIO_PinState last_state;
-    DebugTerminalMode debug_mode = DEBUG_TERMINAL_MODE_WAITING;
-    uint32_t last_mpu6050_tick = HAL_GetTick() - MPU6050_DEBUG_UPDATE_PERIOD_MS;
-
-    (void)argument;
-
-    DebugTerminal_PrintMode(&huart3, debug_mode);
-
-    last_state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
-    DebugTerminal_PrintLine(&huart3,
-                            (last_state == GPIO_PIN_SET)
-                                ? "BLE: connection established"
-                                : "BLE: connection terminated");
-
-    if (last_state != GPIO_PIN_SET)
+    if (huart->Instance == USART1)
     {
-        DebugTask_ClearPhoneRenderArea();
+        HAL_UART_Receive_IT(&huart1, &hm10_uart_rx_byte, 1U);
     }
-
-    for (;;)
-    {
-        GPIO_PinState state;
-
-        state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
-        DebugTerminal_HandleInput(&huart3, &debug_mode);
-
-        if (debug_mode == DEBUG_TERMINAL_MODE_PINGS)
-        {
-            DebugTask_RunPingSequence(&debug_mode,
-                                      ble_rx_line,
-                                      &ble_rx_len,
-                                      sizeof(ble_rx_line));
-            osDelay(1U);
-            continue;
-        }
-
-        if (state != last_state)
-        {
-            last_state = state;
-            DebugTerminal_PrintLine(&huart3,
-                                    (state == GPIO_PIN_SET)
-                                        ? "BLE: connection established"
-                                        : "BLE: connection terminated");
-
-            if (state != GPIO_PIN_SET)
-            {
-                DebugTask_ClearPhoneRenderArea();
-            }
-        }
-
-        if (debug_mode == DEBUG_TERMINAL_MODE_MPU6050_DATA)
-        {
-            DebugTask_PrintMpu6050Data(&last_mpu6050_tick);
-        }
-
-        (void)DebugTask_ReadBleRx(debug_mode,
-                                  ble_rx_line,
-                                  &ble_rx_len,
-                                  sizeof(ble_rx_line));
-
-        osDelay(1U);
-    }
-    /* USER CODE END 5 */
 }
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart)
+{
+    if (huart->Instance == USART1)
+    {
+        uint8_t byte = hm10_uart_rx_byte;
+
+        // Re-arm immediately so no bytes are missed
+        HAL_UART_Receive_IT(&huart1, &hm10_uart_rx_byte, 1U);
+
+        if (byte == '\r')
+        {
+            return;
+        }
+
+        if (byte == '\n')
+        {
+            hm10_isr_line[hm10_isr_line_len] = '\0';
+
+            if (hm10_isr_line_len > 0U)
+            {
+                if (strcmp(hm10_isr_line, DEBUG_TERMINAL_PING_REPLY) == 0)
+                {
+                    osSemaphoreRelease(hm10BottomLED);
+                    hm10_ping_reply_flag = 1U;
+                }
+                else
+                {
+                    osSemaphoreRelease(hm10TopLED);
+                    HM10_DataPacket packet;
+
+                    if (HM10_ParseDataPacket(hm10_isr_line, &packet) != 0U)
+                    {
+                        osMessageQueuePut(hm10RxQueue, &packet, 0U, 0U);
+                    }
+                }
+            }
+
+            hm10_isr_line_len = 0U;
+            hm10_isr_line[0] = '\0';
+            return;
+        }
+
+        if (hm10_isr_line_len < (BLE_RX_LINE_SIZE - 1U))
+        {
+            hm10_isr_line[hm10_isr_line_len++] = (char)byte;
+        }
+        else
+        {
+            hm10_isr_line_len = 0U;
+            hm10_isr_line[0] = '\0';
+        }
+    }
+}
+
+/* USER CODE END 4 */
 
 /* MPU Configuration */
 void MPU_Config(void)
