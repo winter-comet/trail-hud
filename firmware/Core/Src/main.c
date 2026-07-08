@@ -16,6 +16,8 @@
   *=============================================================================
   */
 
+
+
 /**=============================================================================
   * trail-hud hardware wiring
   * STM32H750B-DK + HM-10 AT-09 BLE + Keyestudio MPU-6050 + protoboard
@@ -57,6 +59,8 @@
   *
   *=============================================================================
   */
+
+
 
 /**=============================================================================
   * SERIAL DEBUG TERMINAL / ST-LINK VIRTUAL COM PORT
@@ -103,18 +107,9 @@
   * Serial Bluetooth Terminal app setup:
   * - Open Devices.
   * - Select the Bluetooth LE / BLE list, not Bluetooth Classic.
-  * - Scan for BT05 or the configured HM-10 name.
+  * - Scan for BT05 or the configured HM-10 name (set to TRAIL-MODULE by default).
   * - Connect and stay on the main terminal screen.
   *
-  * Expected behavior:
-  * - When connected, PuTTY should show HM-10 STATE as CONNECTED.
-  * - STM32 -> phone test: the phone should receive heartbeat messages.
-  * - Phone -> STM32 test: send "x" from the phone.
-  * - PuTTY should print, up to two sequential strings per request:
-  *
-  *     USART1 RX byte: 0x78 'x'
-  *
-  * - If echo is enabled, the phone should receive "x" back.
   *
   *=============================================================================
   */
@@ -138,6 +133,12 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef struct
+{
+    GPIO_TypeDef* GPIO_Port;
+    uint16_t GPIO_Pin;
+    uint16_t GPIO_DefaultState;
+} LED_HandleTypeDef;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -145,10 +146,11 @@
 #define BLE_RX_LINE_SIZE 220U
 #define MPU6050_DEBUG_UPDATE_PERIOD_MS 1000U
 #define TRAIL_HUD_LCD_INSTANCE 0U
-#define TRAIL_HUD_LOADING_STAGE_COUNT 3U
+#define TRAIL_HUD_LOADING_STAGE_COUNT 4U
 #define PHONE_RENDER_LINE_WIDTH 1U
 #define PHONE_RENDER_LINE_COLOR UTIL_LCD_COLOR_WHITE
 #define PHONE_RENDER_CLEAR_COLOR UTIL_LCD_COLOR_BLACK
+#define LED_HANDLE_COUNT 3U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -171,11 +173,23 @@ const osThreadAttr_t defaultTask_attributes = {
 /* USER CODE BEGIN PV */
 static HM10_HandleTypeDef hm10;
 static MPU6050_HandleTypeDef mpu6050;
+osSemaphoreId_t hm10_packet;
+static const LED_HandleTypeDef led_handles[LED_HANDLE_COUNT] = {
+    {GPIOD, GPIO_PIN_3, GPIO_PIN_RESET},
+    {GPIOJ, GPIO_PIN_2, GPIO_PIN_SET},
+    {GPIOI, GPIO_PIN_13, GPIO_PIN_SET},
+};
 static const TrailGui_BoundingBox phone_render_bounds = {
     .x_min = (TRAIL_GUI_SCREEN_WIDTH / 2U),
     .x_max = (TRAIL_GUI_SCREEN_WIDTH - 1U),
     .y_min = 0U,
     .y_max = (TRAIL_GUI_SCREEN_HEIGHT - 1U)
+};
+static const TrailGui_BoundingBox compass_bounds = {
+    .x_min = 6U,
+    .x_max = 233U,
+    .y_min = 44U,
+    .y_max = 265U
 };
 /* USER CODE END PV */
 
@@ -196,10 +210,37 @@ static uint8_t DebugTask_ReadBleRx(DebugTerminalMode mode, char* ble_rx_line, ui
 static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms, char* ble_rx_line, uint16_t* ble_rx_len, uint16_t ble_rx_line_size);
 static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode, char* ble_rx_line, uint16_t* ble_rx_len, uint16_t ble_rx_line_size);
 static void DebugTask_PrintMpu6050Data(uint32_t* last_tick);
+static void DebugTask_RenderCompass(uint32_t* last_tick);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/**
+ * @brief Toggles a LED sequence.
+ * @param None.
+ * @return None.
+ */
+static void LED_ToggleSequence(uint32_t delay_ms)
+{
+    if (LED_HANDLE_COUNT < 1U)
+    {
+        return;
+    }
+
+    uint32_t split_delay = delay_ms / 2;
+    HAL_GPIO_TogglePin(led_handles[0].GPIO_Port, led_handles[0].GPIO_Pin);
+    for (uint16_t led = 1U; led < LED_HANDLE_COUNT; led++)
+    {
+        HAL_Delay(split_delay);
+        HAL_GPIO_TogglePin(led_handles[led].GPIO_Port, led_handles[led].GPIO_Pin);
+        HAL_Delay(split_delay);
+        HAL_GPIO_TogglePin(led_handles[led - 1].GPIO_Port, led_handles[led - 1].GPIO_Pin);
+    }
+    HAL_Delay(split_delay);
+    HAL_GPIO_TogglePin(led_handles[LED_HANDLE_COUNT - 1].GPIO_Port, led_handles[LED_HANDLE_COUNT - 1].GPIO_Pin);
+}
+
 /**
  * @brief Fills the phone render area with the solid clear color.
  * @param None.
@@ -496,6 +537,14 @@ static void DebugTask_PrintMpu6050Data(uint32_t* last_tick)
 
     *last_tick = HAL_GetTick();
 }
+
+void LED_HM10PacketReceived()
+{
+    while (1)
+    {
+
+    }
+}
 /* USER CODE END 0 */
 
 /**
@@ -533,6 +582,7 @@ int main(void)
     /* USER CODE BEGIN 2 */
     DebugTerminal_PrintTitle(&huart3);
 
+    /* LCD Init ----------------------------------------------------------------*/
     if (BSP_LCD_Init(TRAIL_HUD_LCD_INSTANCE, LCD_ORIENTATION_LANDSCAPE) != BSP_ERROR_NONE)
     {
         Error_Handler();
@@ -548,15 +598,21 @@ int main(void)
     DebugTerminal_PrintLine(&huart3, "DEBUG: initialized LCD");
     TrailGui_ExpandLoadingBar(1U, TRAIL_HUD_LOADING_STAGE_COUNT);
 
+    /* HM-10 Init --------------------------------------------------------------*/
     if (HM10_Init(&hm10, &huart1) != HM10_OK)
     {
         Error_Handler();
     }
 
-    HM10_SetNameAndReset(&hm10, "Trail-Module", 1000U);
+    if (HM10_SetNameAndReset(&hm10, "Trail-Module", 1000U) != HM10_OK)
+    {
+        Error_Handler();
+    }
+
     DebugTerminal_PrintLine(&huart3, "DEBUG: initialized HM-10 on USART1");
     TrailGui_ExpandLoadingBar(2U, TRAIL_HUD_LOADING_STAGE_COUNT);
 
+    /* MPU6050 Init ------------------------------------------------------------*/
     if (MPU6050_Init(&mpu6050, &hi2c4, MPU6050_DEFAULT_I2C_ADDRESS) != MPU6050_OK)
     {
         Error_Handler();
@@ -564,6 +620,28 @@ int main(void)
 
     DebugTerminal_PrintLine(&huart3, "DEBUG: initialized MPU-6050 on I2C4");
     TrailGui_ExpandLoadingBar(3U, TRAIL_HUD_LOADING_STAGE_COUNT);
+
+    /* LED Init ----------------------------------------------------------------*/
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_GPIOD_CLK_ENABLE();
+    __HAL_RCC_GPIOI_CLK_ENABLE();
+    __HAL_RCC_GPIOJ_CLK_ENABLE();
+
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    for (uint16_t led = 0U; led < LED_HANDLE_COUNT; led++)
+    {
+        GPIO_InitStruct.Pin = led_handles[led].GPIO_Pin;
+        HAL_GPIO_Init(led_handles[led].GPIO_Port, &GPIO_InitStruct);
+        HAL_GPIO_WritePin(led_handles[led].GPIO_Port, led_handles[led].GPIO_Pin, led_handles[led].GPIO_DefaultState);
+    }
+
+    LED_ToggleSequence(450U);
+
+    DebugTerminal_PrintLine(&huart3, "DEBUG: initialized LED");
+    TrailGui_ExpandLoadingBar(4U, TRAIL_HUD_LOADING_STAGE_COUNT);
     HAL_Delay(1000U);
 
     TrailGui_DrawDefaultScreen();
@@ -577,7 +655,7 @@ int main(void)
     /* USER CODE END RTOS_MUTEX */
 
     /* USER CODE BEGIN RTOS_SEMAPHORES */
-    /* add semaphores, ... */
+    hm10_packet = osSemaphoreNew(1, 0, NULL);
     /* USER CODE END RTOS_SEMAPHORES */
 
     /* USER CODE BEGIN RTOS_TIMERS */
@@ -593,7 +671,7 @@ int main(void)
     defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
     /* USER CODE BEGIN RTOS_THREADS */
-    /* add threads, ... */
+    osThreadNew(LED_HM10PacketReceived, NULL, NULL);
     /* USER CODE END RTOS_THREADS */
 
     /* USER CODE BEGIN RTOS_EVENTS */
