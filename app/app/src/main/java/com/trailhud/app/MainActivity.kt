@@ -126,7 +126,7 @@ class MainActivity : ComponentActivity() {
 
     private val discoveredDevices = linkedMapOf<String, BluetoothDevice>()
     private var lastLinkRssiDbm by mutableStateOf<Int?>(null)
-    private var updateRateSeconds: Long = TrailHudPacket.DEFAULT_UPDATE_RATE_SECONDS
+    private var updateRateSeconds: Double = TrailHudPacket.DEFAULT_UPDATE_RATE_SECONDS
 
     @Volatile
     private var lastLocation: Location? = null
@@ -134,7 +134,7 @@ class MainActivity : ComponentActivity() {
     private var lastRotationQuaternion: FloatArray? = null
 
     private val updateRateMs: Long
-        get() = updateRateSeconds.coerceAtLeast(1L) * 1000L
+        get() = (updateRateSeconds * 1000.0).toLong().coerceAtLeast(100L)
 
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
         getSystemService<BluetoothManager>()?.adapter

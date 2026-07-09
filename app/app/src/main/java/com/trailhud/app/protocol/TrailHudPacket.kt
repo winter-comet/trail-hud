@@ -17,7 +17,7 @@ data class PhoneRotationPayload(
 )
 
 object TrailHudPacket {
-    const val DEFAULT_UPDATE_RATE_SECONDS = 1L
+    const val DEFAULT_UPDATE_RATE_SECONDS = 0.5
     const val STM32_PING_PACKET = "trailhud:ping"
     const val PHONE_PING_REPLY_PACKET = "trailhud:pong"
 
