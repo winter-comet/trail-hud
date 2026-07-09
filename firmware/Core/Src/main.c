@@ -105,7 +105,7 @@
   * Serial Bluetooth Terminal app setup:
   * - Open Devices.
   * - Select the Bluetooth LE / BLE list, not Bluetooth Classic.
-  * - Scan for BT05 or the configured HM-10 name (set to TRAIL-MODULE by default).
+  * - Scan for BT05 or the configured HM-10 name (set to TRAIL-HUD by default).
   * - Connect and stay on the main terminal screen.
   *
   *
@@ -149,6 +149,9 @@ typedef struct
 #define PHONE_RENDER_LINE_COLOR UTIL_LCD_COLOR_WHITE
 #define PHONE_RENDER_CLEAR_COLOR UTIL_LCD_COLOR_BLACK
 #define LED_HANDLE_COUNT 3U
+
+#define TRAIL_GUI_PHONE_RENDER_MARGIN 6U
+#define TRAIL_GUI_PHONE_RENDER_PADDING 6U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -166,12 +169,14 @@ static MPU6050_HandleTypeDef mpu6050;
 
 osSemaphoreId_t hm10TopLED;
 osSemaphoreId_t hm10BottomLED;
-osMessageQueueId_t hm10RxQueue;
+osMessageQueueId_t hm10RenderInstructionQueue;
 
 static uint8_t hm10_uart_rx_byte;
-static char hm10_isr_line[BLE_RX_LINE_SIZE];
 static uint16_t hm10_isr_line_len = 0U;
+static char hm10_isr_line[BLE_RX_LINE_SIZE];
 static volatile uint8_t hm10_ping_reply_flag = 0U;
+static volatile DebugTerminalMode debug_terminal_mode = DEBUG_TERMINAL_MODE_WAITING;
+static volatile GPIO_PinState hm10_connection_state = GPIO_PIN_RESET;
 
 static const LED_HandleTypeDef led_handles[LED_HANDLE_COUNT] = {
     {GPIOD, GPIO_PIN_3, GPIO_PIN_RESET},
@@ -179,10 +184,28 @@ static const LED_HandleTypeDef led_handles[LED_HANDLE_COUNT] = {
     {GPIOI, GPIO_PIN_13, GPIO_PIN_SET},
 };
 static const TrailGui_BoundingBox phone_render_bounds = {
-    .x_min = (TRAIL_GUI_SCREEN_WIDTH / 2U),
-    .x_max = (TRAIL_GUI_SCREEN_WIDTH - 1U),
-    .y_min = 0U,
-    .y_max = (TRAIL_GUI_SCREEN_HEIGHT - 1U)
+    .x_min = 241U + (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING),
+    .x_max = 479U - (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING),
+    .y_min = 0U + (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING),
+    .y_max = 239U - (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING),
+};
+static const TrailGui_BoundingBox phone_render_padding_bounds = {
+    .x_min = phone_render_bounds.x_min - TRAIL_GUI_PHONE_RENDER_PADDING,
+    .x_max = phone_render_bounds.x_max + TRAIL_GUI_PHONE_RENDER_PADDING,
+    .y_min = phone_render_bounds.y_min - TRAIL_GUI_PHONE_RENDER_PADDING,
+    .y_max = phone_render_bounds.y_max + TRAIL_GUI_PHONE_RENDER_PADDING,
+};
+static const TrailGui_BoundingBox phone_gps_bounds = {
+    .x_min = phone_render_bounds.x_min,
+    .x_max = phone_render_bounds.x_max,
+    .y_min = phone_render_padding_bounds.y_max + (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING),
+    .y_max = 272U - (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING),
+};
+static const TrailGui_BoundingBox phone_gps_padding_bounds = {
+    .x_min = phone_gps_bounds.x_min - TRAIL_GUI_PHONE_RENDER_PADDING,
+    .x_max = phone_gps_bounds.x_max + TRAIL_GUI_PHONE_RENDER_PADDING,
+    .y_min = phone_gps_bounds.y_min - TRAIL_GUI_PHONE_RENDER_PADDING,
+    .y_max = phone_gps_bounds.y_max + TRAIL_GUI_PHONE_RENDER_PADDING,
 };
 
 const osThreadAttr_t MainThread_attributes = {
@@ -220,7 +243,8 @@ static void DebugTask_PrintMpu6050Data(uint32_t* last_tick);
 
 /**
  * @brief Toggles a LED sequence, in the same order as is defined in the led_handles array.
- * @param None.
+ * @param delay_ms Total time in milliseconds the whole sequence takes; split
+ *                 evenly between each LED transition.
  * @return None.
  */
 static void LED_ToggleSequence(uint32_t delay_ms)
@@ -251,14 +275,15 @@ static void LED_ToggleSequence(uint32_t delay_ms)
 static void DebugTask_ClearPhoneRenderArea(void)
 {
     TrailGui_DrawRoundedRectangle(phone_render_bounds, 0U, PHONE_RENDER_CLEAR_COLOR);
+    TrailGui_DrawRoundedRectangle(phone_gps_bounds, 0U, PHONE_RENDER_CLEAR_COLOR);
 }
 
 /**
- * @brief Reads a fresh MPU-6050 packet and redraws the phone orientation cuboid.
- * @param hm10_packet Pointer to a parsed HM-10 data packet holding the phone
- *                    orientation quaternion fields. NULL causes the function to
- *                    return immediately without drawing. The render is also
- *                    skipped when the HM-10 STATE pin is not asserted.
+ * @brief Redraws the phone orientation cuboid for one parsed HM-10 packet.
+ * @param hm10_packet Parsed HM-10 data packet holding the phone orientation
+ *                    quaternion fields; NULL is not allowed. The render is
+ *                    skipped when hm10_connection_state indicates the BLE
+ *                    link is not currently established.
  * @return None.
  */
 static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
@@ -268,16 +293,17 @@ static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
         return;
     }
 
-    if (HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin) != GPIO_PIN_SET)
+    if (hm10_connection_state != GPIO_PIN_SET)
     {
         return;
     }
 
     DebugTask_ClearPhoneRenderArea();
-    TrailGui_DrawPhoneCuboid(hm10_packet,
+    TrailGui_RenderPhoneCuboid(hm10_packet,
                              phone_render_bounds,
                              PHONE_RENDER_LINE_WIDTH,
                              PHONE_RENDER_LINE_COLOR);
+    TrailGui_RenderPhoneGps(hm10_packet, phone_gps_bounds, UTIL_LCD_COLOR_WHITE);
 }
 
 /**
@@ -321,7 +347,7 @@ static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode)
     {
         uint8_t reply_received = 0U;
 
-        if (HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin) == GPIO_PIN_SET)
+        if (hm10_connection_state == GPIO_PIN_SET)
         {
             if (HM10_SendString(&hm10, DEBUG_TERMINAL_PING_PACKET "\r\n") == HM10_OK)
             {
@@ -406,21 +432,43 @@ void HM10_BottomLEDThread(void* argument)
 }
 
 /**
- * @brief Calls functions, related to BLE packet processing, whenever there are packets in the queue.
+ * @brief Consumes hm10RenderInstructionQueue and applies each message to the LCD/debug terminal.
  * @param argument Does not impact the result.
  * @return None.
  */
 void HM10_Thread(void* argument)
 {
-    HM10_DataPacket packet;
+    TrailGui_RenderWidgetPacket packet;
 
     while (1)
     {
-        // Wait until next HM10 data packet is parsed and enqueued
-        osMessageQueueGet(hm10RxQueue, &packet, NULL, osWaitForever);
+        // Wait until the next render instruction is posted
+        osMessageQueueGet(hm10RenderInstructionQueue, &packet, NULL, osWaitForever);
 
-        // Run the algorithm
-        DebugTask_RenderPhoneFrame(&packet);
+        switch (packet.widget_state)
+        {
+        case RENDER_WIDGET_STATE_ACTIVE:
+            DebugTask_RenderPhoneFrame(&packet.hm10_packet);
+            break;
+
+        case RENDER_WIDGET_STATE_CONNECTED:
+            DebugTerminal_PrintLine(&huart3, "BLE: connection established");
+            break;
+
+        case RENDER_WIDGET_STATE_IDLE:
+        default:
+            DebugTerminal_PrintLine(&huart3, "BLE: connection terminated");
+            DebugTask_ClearPhoneRenderArea();
+
+            UTIL_LCD_SetFont(&Font16);
+            UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
+            UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_BLACK);
+            UTIL_LCD_DisplayStringAt((phone_render_bounds.x_max + phone_render_bounds.x_min) / 2U - 35U,
+                                     (phone_render_bounds.y_max + phone_render_bounds.y_min) / 2U,
+                                     (uint8_t*) "WAITING",
+                                     LEFT_MODE);
+            break;
+        }
     }
 }
 
@@ -431,54 +479,22 @@ void HM10_Thread(void* argument)
  */
 void MainThread(void* argument)
 {
-    GPIO_PinState last_state;
-    DebugTerminalMode debug_mode = DEBUG_TERMINAL_MODE_WAITING;
     uint32_t last_mpu6050_tick = HAL_GetTick() - MPU6050_DEBUG_UPDATE_PERIOD_MS;
 
-    (void)argument;
-
-    DebugTerminal_PrintMode(&huart3, debug_mode);
-
-    last_state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
-    DebugTerminal_PrintLine(&huart3,
-                            (last_state == GPIO_PIN_SET)
-                                ? "BLE: connection established"
-                                : "BLE: connection terminated");
-
-    if (last_state != GPIO_PIN_SET)
-    {
-        DebugTask_ClearPhoneRenderArea();
-    }
+    DebugTerminal_PrintMode(&huart3, debug_terminal_mode);
 
     while (1)
     {
-        GPIO_PinState state;
+        DebugTerminal_HandleInput(&huart3, &debug_terminal_mode);
 
-        state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
-        DebugTerminal_HandleInput(&huart3, &debug_mode);
-
-        if (debug_mode == DEBUG_TERMINAL_MODE_PINGS)
+        if (debug_terminal_mode == DEBUG_TERMINAL_MODE_PINGS)
         {
-            DebugTask_RunPingSequence(&debug_mode);
+            DebugTask_RunPingSequence(&debug_terminal_mode);
             osDelay(1U);
             continue;
         }
 
-        if (state != last_state)
-        {
-            last_state = state;
-            DebugTerminal_PrintLine(&huart3,
-                                    (state == GPIO_PIN_SET)
-                                        ? "BLE: connection established"
-                                        : "BLE: connection terminated");
-
-            if (state != GPIO_PIN_SET)
-            {
-                DebugTask_ClearPhoneRenderArea();
-            }
-        }
-
-        if (debug_mode == DEBUG_TERMINAL_MODE_MPU6050_DATA)
+        if (debug_terminal_mode == DEBUG_TERMINAL_MODE_MPU6050_DATA)
         {
             DebugTask_PrintMpu6050Data(&last_mpu6050_tick);
         }
@@ -545,7 +561,7 @@ int main(void)
         Error_Handler();
     }
 
-    if (HM10_SetNameAndReset(&hm10, "Trail-Module", 1000U) != HM10_OK)
+    if (HM10_SetNameAndReset(&hm10, "TRAIL-HUD", 1000U) != HM10_OK)
     {
         Error_Handler();
     }
@@ -589,6 +605,8 @@ int main(void)
     HAL_Delay(1000U);
 
     TrailGui_DrawDefaultScreen();
+    TrailGui_DrawBoundingRectangle(phone_render_padding_bounds, 10U, UTIL_LCD_COLOR_WHITE);
+    TrailGui_DrawBoundingRectangle(phone_gps_padding_bounds, 10U, UTIL_LCD_COLOR_WHITE);
     /* USER CODE END 2 */
 
     /* Init scheduler */
@@ -608,8 +626,23 @@ int main(void)
     /* USER CODE END RTOS_TIMERS */
 
     /* USER CODE BEGIN RTOS_QUEUES */
-    hm10RxQueue = osMessageQueueNew(16, sizeof(HM10_DataPacket), NULL);
+    hm10RenderInstructionQueue = osMessageQueueNew(16, sizeof(TrailGui_RenderWidgetPacket), NULL);
     HAL_UART_Receive_IT(&huart1, &hm10_uart_rx_byte, 1U);
+
+    hm10_connection_state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
+    DebugTerminal_PrintLine(&huart3,
+                            (hm10_connection_state == GPIO_PIN_SET)
+                                ? "BLE: connection established"
+                                : "BLE: connection terminated");
+
+    TrailGui_RenderWidgetPacket initial_render_packet;
+    initial_render_packet.widget_state = (hm10_connection_state == GPIO_PIN_SET)
+                                              ? RENDER_WIDGET_STATE_CONNECTED
+                                              : RENDER_WIDGET_STATE_IDLE;
+    osMessageQueuePut(hm10RenderInstructionQueue, &initial_render_packet, 0U, 0U);
+
+    HAL_NVIC_SetPriority(EXTI3_IRQn, 6, 0);
+    HAL_NVIC_EnableIRQ(EXTI3_IRQn);
     /* USER CODE END RTOS_QUEUES */
 
     /* USER CODE BEGIN RTOS_THREADS */
@@ -863,7 +896,7 @@ static void MX_GPIO_Init(void)
 
     /*Configure GPIO pin : HM10_STATE_Pin */
     GPIO_InitStruct.Pin = HM10_STATE_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(HM10_STATE_GPIO_Port, &GPIO_InitStruct);
 
@@ -872,6 +905,11 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+/**
+ * @brief Re-arms USART1 byte reception after a UART error.
+ * @param huart UART handle reporting the error; only USART1 is handled.
+ * @return None.
+ */
 void HAL_UART_ErrorCallback(UART_HandleTypeDef* huart)
 {
     if (huart->Instance == USART1)
@@ -880,6 +918,20 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef* huart)
     }
 }
 
+/**
+ * @brief Assembles and dispatches one line received on the HM-10 UART.
+ * @param huart UART handle reporting the completed byte reception; only
+ *              USART1 is handled.
+ * @return None.
+ *
+ * Runs in interrupt context, one byte per call. '\r' is ignored, '\n'
+ * terminates and dispatches the accumulated line, any other byte is
+ * appended to hm10_isr_line. A completed ping-reply line releases
+ * hm10BottomLED and sets hm10_ping_reply_flag. A completed data packet is
+ * parsed and, on success, copied *by value* into a TrailGui_RenderWidgetPacket
+ * message and posted to hm10RenderInstructionQueue so HM10_Thread can render
+ * it outside of interrupt context.
+ */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart)
 {
     if (huart->Instance == USART1)
@@ -908,11 +960,19 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart)
                 else
                 {
                     osSemaphoreRelease(hm10TopLED);
-                    HM10_DataPacket packet;
+                    HM10_DataPacket data_packet;
 
-                    if (HM10_ParseDataPacket(hm10_isr_line, &packet) != 0U)
+                    if (HM10_ParseDataPacket(hm10_isr_line, &data_packet) != 0U)
                     {
-                        osMessageQueuePut(hm10RxQueue, &packet, 0U, 0U);
+                        TrailGui_RenderWidgetPacket render_packet;
+                        render_packet.hm10_packet = data_packet;   /* copy by value into the message */
+                        render_packet.widget_state = RENDER_WIDGET_STATE_ACTIVE;
+                        osMessageQueuePut(hm10RenderInstructionQueue, &render_packet, 0U, 0U);
+
+                        if (debug_terminal_mode == DEBUG_TERMINAL_MODE_HM10_DATA)
+                        {
+                            DebugTerminal_ParsePhonePacket(&huart3, hm10_isr_line);
+                        }
                     }
                 }
             }
@@ -931,6 +991,33 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart)
             hm10_isr_line_len = 0U;
             hm10_isr_line[0] = '\0';
         }
+    }
+}
+
+/**
+ * @brief Updates the cached HM-10 connection state and notifies HM10_Thread.
+ * @param GPIO_Pin Pin number that triggered the EXTI line; only
+ *                 HM10_STATE_Pin is handled.
+ * @return None.
+ *
+ * Fires on both edges of HM10_STATE_Pin. This is the only interrupt-time
+ * caller of HAL_GPIO_ReadPin() for this pin; every other consumer reads the
+ * cached hm10_connection_state value instead. Posts a lightweight
+ * RENDER_WIDGET_STATE_CONNECTED or RENDER_WIDGET_STATE_IDLE message so
+ * HM10_Thread performs the actual LCD/debug-terminal update outside of
+ * interrupt context.
+ */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    if (GPIO_Pin == HM10_STATE_Pin)
+    {
+        hm10_connection_state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
+
+        TrailGui_RenderWidgetPacket render_packet;
+        render_packet.widget_state = (hm10_connection_state == GPIO_PIN_SET)
+                                          ? RENDER_WIDGET_STATE_CONNECTED
+                                          : RENDER_WIDGET_STATE_IDLE;
+        osMessageQueuePut(hm10RenderInstructionQueue, &render_packet, 0U, 0U);
     }
 }
 

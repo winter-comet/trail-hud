@@ -49,6 +49,43 @@ typedef struct
 } TrailGui_BoundingBox;
 
 /**
+ * @brief Lists the lifecycle states carried by a TrailGui_RenderWidgetPacket message.
+ *
+ * Values:
+ * - RENDER_WIDGET_STATE_IDLE: No BLE connection is active; the phone render
+ *   area should show the idle "WAITING" placeholder.
+ * - RENDER_WIDGET_STATE_CONNECTED: A BLE connection was just established but
+ *   no phone data packet has arrived yet; only the debug-terminal status line
+ *   needs printing.
+ * - RENDER_WIDGET_STATE_ACTIVE: A phone data packet was parsed while
+ *   connected; the phone render area should show the packet's orientation.
+ */
+typedef enum
+{
+    RENDER_WIDGET_STATE_IDLE = 0,
+    RENDER_WIDGET_STATE_CONNECTED,
+    RENDER_WIDGET_STATE_ACTIVE,
+} TrailGui_RenderWidgetState;
+
+/**
+ * @brief Stores one message posted to hm10RenderInstructionQueue.
+ *
+ * Fields:
+ * - hm10_packet: Parsed phone data packet, stored by value so the message
+ *   stays valid after the producer's stack frame returns. The producer is
+ *   the USART1 RX ISR, so a pointer to a local variable would dangle by the
+ *   time the consumer thread reads it. Only meaningful when widget_state is
+ *   RENDER_WIDGET_STATE_ACTIVE.
+ * - widget_state: Selects how the consumer should update the LCD and debug
+ *   terminal for this message.
+ */
+typedef struct
+{
+    HM10_DataPacket hm10_packet;
+    TrailGui_RenderWidgetState widget_state;
+} TrailGui_RenderWidgetPacket;
+
+/**
  * @brief Clears the full LCD screen with one solid color.
  * @param color ARGB8888 LCD color value passed directly to the LCD utility
  *              driver.
@@ -135,10 +172,14 @@ void TrailGui_DrawLine(TrailGui_Point start, TrailGui_Point end, uint16_t width,
  * @param color ARGB8888 LCD color value used for all cuboid edges.
  * @return None.
  */
-void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
+void TrailGui_RenderPhoneCuboid(const HM10_DataPacket* hm10_packet,
                               TrailGui_BoundingBox bounding_box,
                               uint16_t line_width,
                               uint32_t color);
+
+void TrailGui_RenderPhoneGps(const HM10_DataPacket* hm10_packet,
+                             TrailGui_BoundingBox bounding_box,
+                             uint32_t color);
 
 #ifdef __cplusplus
 }

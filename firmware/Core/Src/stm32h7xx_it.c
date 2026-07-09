@@ -189,4 +189,9 @@ void USART1_IRQHandler(void)
 {
     HAL_UART_IRQHandler(&huart1);
 }
+
+void EXTI3_IRQHandler(void)
+{
+    HAL_GPIO_EXTI_IRQHandler(HM10_STATE_Pin);
+}
 /* USER CODE END 1 */

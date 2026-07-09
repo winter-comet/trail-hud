@@ -1,14 +1,13 @@
 #include "trail_gui.h"
+#include "debug_terminal.h"
 
 #include "stm32h750b_discovery_lcd.h"
 #include "stm32_lcd.h"
 
 #include <math.h>
+#include <stdio.h>
 
 #define TRAIL_GUI_TITLE "TRAIL-HUD"
-#define TRAIL_GUI_DEVICE_CONNECTED "DEVICE IS CONNECTED"
-#define TRAIL_GUI_DEVICE_DISCONNECTED "WAITING FOR A CONNECTION"
-#define TRAIL_GUI_SPLIT_LINE_X ((TRAIL_GUI_SCREEN_WIDTH - TRAIL_GUI_LINE_WIDTH_THIN) / 2U)
 #define TRAIL_GUI_PHONE_MODEL_HALF_WIDTH 0.38f
 #define TRAIL_GUI_PHONE_MODEL_HALF_HEIGHT 0.80f
 #define TRAIL_GUI_PHONE_MODEL_HALF_DEPTH 0.055f
@@ -22,7 +21,7 @@
 #define TRAIL_GUI_LOADING_BAR_WIDTH 392U
 #define TRAIL_GUI_LOADING_BAR_HEIGHT 30U
 #define TRAIL_GUI_LOADING_BAR_BORDER_WIDTH 2U
-#define TRAIL_GUI_LOADING_BAR_PADDING 5U
+#define TRAIL_GUI_LOADING_BAR_PADDING 6U
 
 typedef struct
 {
@@ -328,17 +327,6 @@ void TrailGui_ExpandLoadingBar(uint16_t completed_stage_count, uint16_t total_st
 }
 
 /**
- * @brief Draws a vertical divider through the center of the screen.
- * @param None.
- * @return None.
- */
-void TrailGui_DrawVerticalSplitLine(void)
-{
-    UTIL_LCD_FillRect(TRAIL_GUI_SPLIT_LINE_X, 0U, TRAIL_GUI_LINE_WIDTH_THIN, TRAIL_GUI_SCREEN_HEIGHT,
-                      UTIL_LCD_COLOR_BLACK);
-}
-
-/**
  * @brief Draws a corner-only rectangle inside the supplied bounding box.
  * @param bounding_box Rectangle bounds in LCD pixels. x_min/y_min and x_max/y_max
  *                     are inclusive outer-edge coordinates. Reversed bounds are
@@ -349,7 +337,9 @@ void TrailGui_DrawVerticalSplitLine(void)
  * @param color ARGB8888 LCD color value used for the corner lines.
  * @return None.
  */
-void TrailGui_DrawBoundingRectangle(TrailGui_BoundingBox bounding_box, uint16_t corner_length_px, uint32_t color)
+void TrailGui_DrawBoundingRectangle(TrailGui_BoundingBox bounding_box,
+                                    uint16_t corner_length_px,
+                                    uint32_t color)
 {
     uint16_t min_x;
     uint16_t max_x;
@@ -787,7 +777,7 @@ static TrailGui_Vector3 TrailGui_Mat3RotateVector(const TrailGui_Matrix3* matrix
  * @param color ARGB8888 LCD color value used for all cuboid edges.
  * @return None.
  */
-void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
+void TrailGui_RenderPhoneCuboid(const HM10_DataPacket* hm10_packet,
                               TrailGui_BoundingBox bounding_box,
                               uint16_t line_width,
                               uint32_t color)
@@ -885,6 +875,34 @@ void TrailGui_DrawPhoneCuboid(const HM10_DataPacket* hm10_packet,
     }
 }
 
+void TrailGui_RenderPhoneGps(const HM10_DataPacket* hm10_packet,
+                             TrailGui_BoundingBox bounding_box,
+                             uint32_t color)
+{
+    if (hm10_packet == NULL)
+    {
+        return;
+    }
+
+    char value[20];
+    char text[32];
+
+    const uint16_t y = (bounding_box.y_min + bounding_box.y_max) / 2U - 5U;
+    const uint16_t x_mid = (bounding_box.x_max - bounding_box.x_min) / 2U;
+
+    UTIL_LCD_SetFont(&Font12);
+    UTIL_LCD_SetTextColor(color);
+    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_BLACK);
+
+    DebugTerminal_FormatFixed(value, sizeof(value), hm10_packet->lat_deg, 6U, 10U);
+    snprintf(text, sizeof(text), "LAT:%s", value);
+    UTIL_LCD_DisplayStringAt(bounding_box.x_min, y, (uint8_t *)text, LEFT_MODE);
+
+    DebugTerminal_FormatFixed(value, sizeof(value), hm10_packet->lon_deg, 6U, 10U);
+    snprintf(text, sizeof(text), "LON:%s", value);
+    UTIL_LCD_DisplayStringAt(bounding_box.x_min + x_mid, y, (uint8_t *)text, LEFT_MODE);
+}
+
 /**
  * @brief Draws the default trail-hud LCD layout.
  * @param None.
@@ -899,13 +917,6 @@ void TrailGui_DrawDefaultScreen(void)
         .y_max = 272U
     };
 
-    TrailGui_BoundingBox title_bounds = {
-        .x_min = 6U,
-        .x_max = 233U,
-        .y_min = 6U,
-        .y_max = 38U
-    };
-
     TrailGui_BoundingBox gyroscope_background = {
         .x_min = 6U,
         .x_max = 233U,
@@ -917,9 +928,9 @@ void TrailGui_DrawDefaultScreen(void)
     TrailGui_DrawRoundedRectangle(olive_background, 5U, TRAIL_GUI_COLOR_LIGHT_OLIVE);
     TrailGui_DrawRoundedRectangle(gyroscope_background, 5U, UTIL_LCD_COLOR_WHITE);
 
-    TrailGui_DrawRoundedRectangle(title_bounds, 5U, UTIL_LCD_COLOR_WHITE);
     UTIL_LCD_SetFont(&Font24);
     UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_SetBackColor(TRAIL_GUI_COLOR_LIGHT_OLIVE);
     UTIL_LCD_DisplayStringAt(12U, 12U, (uint8_t*)TRAIL_GUI_TITLE, LEFT_MODE);
+    TrailGui_DrawLine((TrailGui_Point) {8U, 37U}, (TrailGui_Point) {165U, 37U}, 2U, UTIL_LCD_COLOR_BLACK);
 }

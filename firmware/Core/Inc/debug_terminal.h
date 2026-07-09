@@ -37,6 +37,19 @@ typedef enum
 } DebugTerminalMode;
 
 /**
+ * @brief Formats a floating-point value as fixed-point text with optional left padding.
+ * @param out Destination character buffer; NULL is allowed and causes no output.
+ * @param out_size Size of out in bytes, including the null terminator; 0 is
+ *                 allowed and causes no output.
+ * @param value Floating-point value to format.
+ * @param decimals Number of digits to print after the decimal point.
+ * @param width Minimum output width in characters; shorter values are padded
+ *              with leading spaces.
+ * @return Nothing.
+ */
+void DebugTerminal_FormatFixed(char* out, size_t out_size, double value, uint8_t decimals, uint8_t width);
+
+/**
  * @brief Prints the startup banner and command overview for the debug terminal.
  * @param huart STM32 HAL UART handle for the debug terminal; NULL is allowed
  *              and causes no output.

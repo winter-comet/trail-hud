@@ -1,7 +1,6 @@
 #include "debug_terminal.h"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #define DEBUG_TERMINAL_PRINT_SIZE 220U
@@ -59,7 +58,7 @@ static uint32_t DebugTerminal_Pow10(uint8_t exponent)
  *              with leading spaces.
  * @return Nothing.
  */
-static void DebugTerminal_FormatFixed(char* out,
+void DebugTerminal_FormatFixed(char* out,
                                       size_t out_size,
                                       double value,
                                       uint8_t decimals,

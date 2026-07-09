@@ -49,7 +49,6 @@ set(USER_SRC
         Core/Src/mpu6050.c
         Core/Src/mpu6050_packet.c
         Core/Src/trail_gui.c
-        Core/Src/trail_orientation.c
         Core/Src/debug_terminal.c
 )
 
