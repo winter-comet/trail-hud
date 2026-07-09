@@ -571,7 +571,7 @@ void DebugTerminal_PrintMode(UART_HandleTypeDef* huart, DebugTerminalMode mode)
  *             causes no input handling.
  * @return Nothing.
  */
-void DebugTerminal_HandleInput(UART_HandleTypeDef* huart, DebugTerminalMode* mode)
+void DebugTerminal_HandleInput(UART_HandleTypeDef* huart, volatile DebugTerminalMode* mode)
 {
     uint8_t rx_byte = 0U;
 

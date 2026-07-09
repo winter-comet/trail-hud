@@ -151,7 +151,7 @@ typedef struct
 #define LED_HANDLE_COUNT 3U
 
 #define TRAIL_GUI_PHONE_RENDER_MARGIN 6U
-#define TRAIL_GUI_PHONE_RENDER_PADDING 6U
+#define TRAIL_GUI_PHONE_RENDER_PADDING 12U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -198,14 +198,14 @@ static const TrailGui_BoundingBox phone_render_padding_bounds = {
 static const TrailGui_BoundingBox phone_gps_bounds = {
     .x_min = phone_render_bounds.x_min,
     .x_max = phone_render_bounds.x_max,
-    .y_min = phone_render_padding_bounds.y_max + (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING),
-    .y_max = 272U - (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING),
+    .y_min = phone_render_padding_bounds.y_max + (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING / 2),
+    .y_max = 272U - (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING / 2),
 };
 static const TrailGui_BoundingBox phone_gps_padding_bounds = {
     .x_min = phone_gps_bounds.x_min - TRAIL_GUI_PHONE_RENDER_PADDING,
     .x_max = phone_gps_bounds.x_max + TRAIL_GUI_PHONE_RENDER_PADDING,
-    .y_min = phone_gps_bounds.y_min - TRAIL_GUI_PHONE_RENDER_PADDING,
-    .y_max = phone_gps_bounds.y_max + TRAIL_GUI_PHONE_RENDER_PADDING,
+    .y_min = phone_gps_bounds.y_min - TRAIL_GUI_PHONE_RENDER_PADDING / 2,
+    .y_max = phone_gps_bounds.y_max + TRAIL_GUI_PHONE_RENDER_PADDING / 2,
 };
 
 const osThreadAttr_t MainThread_attributes = {
@@ -234,7 +234,7 @@ void MainThread(void* argument);
 static void DebugTask_ClearPhoneRenderArea(void);
 static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet);
 static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms);
-static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode);
+static void DebugTask_RunPingSequence(volatile DebugTerminalMode* debug_mode);
 static void DebugTask_PrintMpu6050Data(uint32_t* last_tick);
 /* USER CODE END PFP */
 
@@ -242,7 +242,7 @@ static void DebugTask_PrintMpu6050Data(uint32_t* last_tick);
 /* USER CODE BEGIN 0 */
 
 /**
- * @brief Toggles a LED sequence, in the same order as is defined in the led_handles array.
+ * @brief Toggles a LED sequence, toggling all pins, defined in the led_handles array.
  * @param delay_ms Total time in milliseconds the whole sequence takes; split
  *                 evenly between each LED transition.
  * @return None.
@@ -254,25 +254,20 @@ static void LED_ToggleSequence(uint32_t delay_ms)
         return;
     }
 
-    uint32_t split_delay = delay_ms / 2;
-    HAL_GPIO_TogglePin(led_handles[0].GPIO_Port, led_handles[0].GPIO_Pin);
-    for (uint16_t led = 1U; led < LED_HANDLE_COUNT; led++)
+    for (uint16_t led = 0U; led < LED_HANDLE_COUNT; led++)
     {
-        HAL_Delay(split_delay);
         HAL_GPIO_TogglePin(led_handles[led].GPIO_Port, led_handles[led].GPIO_Pin);
-        HAL_Delay(split_delay);
-        HAL_GPIO_TogglePin(led_handles[led - 1].GPIO_Port, led_handles[led - 1].GPIO_Pin);
+        HAL_Delay(delay_ms);
+        HAL_GPIO_TogglePin(led_handles[led].GPIO_Port, led_handles[led].GPIO_Pin);
+        HAL_Delay(delay_ms);
     }
-    HAL_Delay(split_delay);
-    HAL_GPIO_TogglePin(led_handles[LED_HANDLE_COUNT - 1].GPIO_Port, led_handles[LED_HANDLE_COUNT - 1].GPIO_Pin);
 }
 
 /**
  * @brief Fills the phone render area with the solid clear color.
- * @param None.
  * @return None.
  */
-static void DebugTask_ClearPhoneRenderArea(void)
+static void DebugTask_ClearPhoneRenderArea()
 {
     TrailGui_DrawRoundedRectangle(phone_render_bounds, 0U, PHONE_RENDER_CLEAR_COLOR);
     TrailGui_DrawRoundedRectangle(phone_gps_bounds, 0U, PHONE_RENDER_CLEAR_COLOR);
@@ -339,7 +334,7 @@ static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms)
  *                   full sequence completes.
  * @return None.
  */
-static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode)
+static void DebugTask_RunPingSequence(volatile DebugTerminalMode* debug_mode)
 {
     DebugTerminal_PrintLine(&huart3, "BLE: pinging phone with 4 packets of data");
 
@@ -373,19 +368,13 @@ static void DebugTask_RunPingSequence(DebugTerminalMode* debug_mode)
 static void DebugTask_PrintMpu6050Data(uint32_t* last_tick)
 {
     MPU6050_DataPacket packet;
-    MPU6050_StatusTypeDef status;
-
-    if (last_tick == NULL)
-    {
-        return;
-    }
 
     if ((HAL_GetTick() - *last_tick) < MPU6050_DEBUG_UPDATE_PERIOD_MS)
     {
         return;
     }
 
-    status = MPU6050_ReadDataPacket(&mpu6050, &packet);
+    MPU6050_StatusTypeDef status = MPU6050_ReadDataPacket(&mpu6050, &packet);
 
     if (status == MPU6050_OK)
     {
@@ -460,10 +449,10 @@ void HM10_Thread(void* argument)
             DebugTerminal_PrintLine(&huart3, "BLE: connection terminated");
             DebugTask_ClearPhoneRenderArea();
 
-            UTIL_LCD_SetFont(&Font16);
+            UTIL_LCD_SetFont(&Font12);
             UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
             UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_BLACK);
-            UTIL_LCD_DisplayStringAt((phone_render_bounds.x_max + phone_render_bounds.x_min) / 2U - 35U,
+            UTIL_LCD_DisplayStringAt((phone_render_bounds.x_max + phone_render_bounds.x_min) / 2U - 25U,
                                      (phone_render_bounds.y_max + phone_render_bounds.y_min) / 2U,
                                      (uint8_t*) "WAITING",
                                      LEFT_MODE);
@@ -487,16 +476,16 @@ void MainThread(void* argument)
     {
         DebugTerminal_HandleInput(&huart3, &debug_terminal_mode);
 
-        if (debug_terminal_mode == DEBUG_TERMINAL_MODE_PINGS)
+        switch (debug_terminal_mode)
         {
+        case DEBUG_TERMINAL_MODE_PINGS:
             DebugTask_RunPingSequence(&debug_terminal_mode);
-            osDelay(1U);
-            continue;
-        }
-
-        if (debug_terminal_mode == DEBUG_TERMINAL_MODE_MPU6050_DATA)
-        {
+            break;
+        case DEBUG_TERMINAL_MODE_MPU6050_DATA:
             DebugTask_PrintMpu6050Data(&last_mpu6050_tick);
+            break;
+        default:
+            break;
         }
 
         osDelay(1U);
@@ -607,6 +596,14 @@ int main(void)
     TrailGui_DrawDefaultScreen();
     TrailGui_DrawBoundingRectangle(phone_render_padding_bounds, 10U, UTIL_LCD_COLOR_WHITE);
     TrailGui_DrawBoundingRectangle(phone_gps_padding_bounds, 10U, UTIL_LCD_COLOR_WHITE);
+
+    UTIL_LCD_SetFont(&Font12);
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_BLACK);
+    UTIL_LCD_DisplayStringAt((phone_render_padding_bounds.x_max + phone_render_padding_bounds.x_min) / 2U - 45U,
+                             phone_render_padding_bounds.y_min + 2U,
+                             (uint8_t*) "DEVICE RENDER",
+                             LEFT_MODE);
     /* USER CODE END 2 */
 
     /* Init scheduler */

@@ -114,7 +114,7 @@ void DebugTerminal_PrintMpu6050Packet(UART_HandleTypeDef* huart,
  *             causes no input handling.
  * @return Nothing.
  */
-void DebugTerminal_HandleInput(UART_HandleTypeDef* huart, DebugTerminalMode* mode);
+void DebugTerminal_HandleInput(UART_HandleTypeDef* huart, volatile DebugTerminalMode* mode);
 
 /**
  * @brief Accumulates BLE RX bytes into newline-terminated packets for debug printing.
