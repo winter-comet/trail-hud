@@ -9,23 +9,23 @@ static char debug_print[DEBUG_TERMINAL_PRINT_SIZE];
 
 typedef struct
 {
-    const char* mode_trigger;
-    const char* mode_name_char;
-    DebugTerminalMode mode_name_enum;
+    const char mode_trigger;
+    const char* mode_display_name;
+    DebugTerminalMode mode;
 } Command;
 
 static const Command commands[] = {
-    {"h", "HELP", DEBUG_TERMINAL_MODE_HELP},
-    {"H", "HELP", DEBUG_TERMINAL_MODE_HELP},
-    {"w", "WAITING", DEBUG_TERMINAL_MODE_WAITING},
-    {"W", "WAITING", DEBUG_TERMINAL_MODE_WAITING},
-    {"p", "PINGS", DEBUG_TERMINAL_MODE_PINGS},
-    {"P", "PINGS", DEBUG_TERMINAL_MODE_PINGS},
-    {"d", "PHONE DATA", DEBUG_TERMINAL_MODE_HM10_DATA},
-    {"D", "PHONE DATA", DEBUG_TERMINAL_MODE_HM10_DATA},
-    {"i", "GYROSCOPE DATA", DEBUG_TERMINAL_MODE_MPU6050_DATA},
-    {"I", "GYROSCOPE DATA", DEBUG_TERMINAL_MODE_MPU6050_DATA},
-    {NULL, NULL, DEBUG_TERMINAL_MODE_WAITING},
+    {'h', "HELP", DEBUG_TERMINAL_MODE_HELP},
+    {'H', "HELP", DEBUG_TERMINAL_MODE_HELP},
+    {'w', "WAITING", DEBUG_TERMINAL_MODE_WAITING},
+    {'W', "WAITING", DEBUG_TERMINAL_MODE_WAITING},
+    {'p', "PINGS", DEBUG_TERMINAL_MODE_PINGS},
+    {'P', "PINGS", DEBUG_TERMINAL_MODE_PINGS},
+    {'d', "PHONE DATA", DEBUG_TERMINAL_MODE_HM10_DATA},
+    {'D', "PHONE DATA", DEBUG_TERMINAL_MODE_HM10_DATA},
+    {'i', "GYROSCOPE DATA", DEBUG_TERMINAL_MODE_MPU6050_DATA},
+    {'I', "GYROSCOPE DATA", DEBUG_TERMINAL_MODE_MPU6050_DATA},
+    {'\0', NULL, DEBUG_TERMINAL_MODE_WAITING},
 };
 
 /**
@@ -234,10 +234,10 @@ void DebugTerminal_PrintTitle(UART_HandleTypeDef* huart)
  */
 static uint8_t DebugTerminal_IsHelpCommand(uint8_t rx_byte)
 {
-    for (int command_ix = 0; commands[command_ix].mode_trigger != NULL; command_ix++)
+    for (int command_ix = 0; commands[command_ix].mode_trigger != '\0'; command_ix++)
     {
-        if ((commands[command_ix].mode_name_enum == DEBUG_TERMINAL_MODE_HELP) &&
-            (rx_byte == (uint8_t)commands[command_ix].mode_trigger[0]))
+        if ((commands[command_ix].mode == DEBUG_TERMINAL_MODE_HELP) &&
+            (rx_byte == (uint8_t)commands[command_ix].mode_trigger))
         {
             return 1U;
         }
@@ -434,82 +434,6 @@ void DebugTerminal_ParsePhonePacket(UART_HandleTypeDef* huart, const char* packe
 }
 
 /**
- * @brief Accumulates BLE RX bytes into newline-terminated packets for debug printing.
- * @param debug_uart STM32 HAL UART handle for debug output; NULL is allowed and
- *                   causes no processing.
- * @param rx_byte One byte received from the HM-10 UART bridge.
- * @param rx_line Destination line buffer used to accumulate bytes until \n;
- *                NULL is allowed and causes no processing.
- * @param rx_len Pointer to the current number of bytes stored in rx_line; NULL
- *               is allowed and causes no processing.
- * @param rx_line_size Size of rx_line in bytes, including space for the null
- *                     terminator; 0 is allowed and causes no processing.
- * @param mode Current debug terminal mode; phone packets are printed only in
- *             DEBUG_TERMINAL_MODE_PHONE_DATA.
- * @return 1 when the completed line matches DEBUG_TERMINAL_PING_REPLY, or 0
- *         when no completed ping reply is detected.
- */
-uint8_t DebugTerminal_HandleBleRxByte(UART_HandleTypeDef* debug_uart,
-                                      uint8_t rx_byte,
-                                      char* rx_line,
-                                      uint16_t* rx_len,
-                                      uint16_t rx_line_size,
-                                      DebugTerminalMode mode)
-{
-    uint8_t is_ping_reply = 0U;
-
-    if ((debug_uart == NULL) || (rx_line == NULL) || (rx_len == NULL) || (rx_line_size == 0U))
-    {
-        return 0U;
-    }
-
-    if (rx_byte == '\r')
-    {
-        return 0U;
-    }
-
-    if (rx_byte == '\n')
-    {
-        rx_line[*rx_len] = '\0';
-
-        if (*rx_len > 0U)
-        {
-            if (strcmp(rx_line, DEBUG_TERMINAL_PING_REPLY) == 0)
-            {
-                is_ping_reply = 1U;
-            }
-            else if (mode == DEBUG_TERMINAL_MODE_HM10_DATA)
-            {
-                DebugTerminal_ParsePhonePacket(debug_uart, rx_line);
-            }
-        }
-
-        *rx_len = 0U;
-        rx_line[0] = '\0';
-
-        return is_ping_reply;
-    }
-
-    if (*rx_len < (uint16_t)(rx_line_size - 1U))
-    {
-        rx_line[*rx_len] = (char)rx_byte;
-        (*rx_len)++;
-    }
-    else
-    {
-        *rx_len = 0U;
-        rx_line[0] = '\0';
-
-        if (mode == DEBUG_TERMINAL_MODE_HM10_DATA)
-        {
-            DebugTerminal_PrintLine(debug_uart, "BLE: RX line overflow, dropped partial packet");
-        }
-    }
-
-    return 0U;
-}
-
-/**
  * @brief Converts a debug terminal mode value to a readable mode name.
  * @param mode Debug terminal mode to convert.
  * @return Pointer to a static string: "WAITING", "PINGS", "PHONE DATA",
@@ -519,11 +443,11 @@ const char* DebugTerminal_ModeName(DebugTerminalMode mode)
 {
     const char* mode_name = "UNKNOWN";
 
-    for (int command_ix = 0; commands[command_ix].mode_name_char != NULL; command_ix++)
+    for (int command_ix = 0; commands[command_ix].mode_display_name != NULL; command_ix++)
     {
-        if (commands[command_ix].mode_name_enum == mode)
+        if (commands[command_ix].mode == mode)
         {
-            mode_name = commands[command_ix].mode_name_char;
+            mode_name = commands[command_ix].mode_display_name;
             break;
         }
     }
@@ -594,11 +518,11 @@ void DebugTerminal_HandleInput(UART_HandleTypeDef* huart, volatile DebugTerminal
             continue;
         }
 
-        for (int command_ix = 0; commands[command_ix].mode_trigger != NULL; command_ix++)
+        for (int command_ix = 0; commands[command_ix].mode_trigger != '\0'; command_ix++)
         {
-            if (rx_byte == (uint8_t)commands[command_ix].mode_trigger[0])
+            if (rx_byte == (uint8_t)commands[command_ix].mode_trigger)
             {
-                *mode = commands[command_ix].mode_name_enum;
+                *mode = commands[command_ix].mode;
                 DebugTerminal_PrintMode(huart, *mode);
                 break;
             }

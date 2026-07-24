@@ -116,29 +116,6 @@ void DebugTerminal_PrintMpu6050Packet(UART_HandleTypeDef* huart,
  */
 void DebugTerminal_HandleInput(UART_HandleTypeDef* huart, volatile DebugTerminalMode* mode);
 
-/**
- * @brief Accumulates BLE RX bytes into newline-terminated packets for debug printing.
- * @param debug_uart STM32 HAL UART handle for debug output; NULL is allowed and
- *                   causes no processing.
- * @param rx_byte One byte received from the HM-10 UART bridge.
- * @param rx_line Destination line buffer used to accumulate bytes until \n;
- *                NULL is allowed and causes no processing.
- * @param rx_len Pointer to the current number of bytes stored in rx_line; NULL
- *               is allowed and causes no processing.
- * @param rx_line_size Size of rx_line in bytes, including space for the null
- *                     terminator; 0 is allowed and causes no processing.
- * @param mode Current debug terminal mode; phone packets are printed only in
- *             DEBUG_TERMINAL_MODE_PHONE_DATA.
- * @return 1 when the completed line matches DEBUG_TERMINAL_PING_REPLY, or 0
- *         when no completed ping reply is detected.
- */
-uint8_t DebugTerminal_HandleBleRxByte(UART_HandleTypeDef* debug_uart,
-                                      uint8_t rx_byte,
-                                      char* rx_line,
-                                      uint16_t* rx_len,
-                                      uint16_t rx_line_size,
-                                      DebugTerminalMode mode);
-
 #ifdef __cplusplus
 }
 #endif

@@ -141,7 +141,6 @@ typedef struct
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BLE_RX_LINE_SIZE 220U
 #define MPU6050_DEBUG_UPDATE_PERIOD_MS 1000U
 #define TRAIL_HUD_LCD_INSTANCE 0U
 #define TRAIL_HUD_LOADING_STAGE_COUNT 4U
@@ -167,13 +166,16 @@ UART_HandleTypeDef huart3;
 static HM10_HandleTypeDef hm10;
 static MPU6050_HandleTypeDef mpu6050;
 
-osSemaphoreId_t hm10TopLED;
-osSemaphoreId_t hm10BottomLED;
-osMessageQueueId_t hm10RenderInstructionQueue;
-
+/* HM-10 USART1 RX ISR state. These belong here, not in hm10.h, because only
+ * HAL_UART_RxCpltCallback/HAL_UART_ErrorCallback below ever touch them. */
 static uint8_t hm10_uart_rx_byte;
 static uint16_t hm10_isr_line_len = 0U;
-static char hm10_isr_line[BLE_RX_LINE_SIZE];
+static char hm10_isr_line[HM10_DEFAULT_LINE_SIZE];
+
+osSemaphoreId_t hm10_top_led_semaphore;
+osSemaphoreId_t hm10_bottom_led_semaphore;
+osMessageQueueId_t hm10_render_queue;
+
 static volatile uint8_t hm10_ping_reply_flag = 0U;
 static volatile DebugTerminalMode debug_terminal_mode = DEBUG_TERMINAL_MODE_WAITING;
 static volatile GPIO_PinState hm10_connection_state = GPIO_PIN_RESET;
@@ -397,7 +399,7 @@ void HM10_TopLEDThread(void* argument)
 {
     while (1)
     {
-        osSemaphoreAcquire(hm10TopLED, osWaitForever);
+        osSemaphoreAcquire(hm10_top_led_semaphore, osWaitForever);
         HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_3);
         osDelay(100);
         HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_3);
@@ -413,7 +415,7 @@ void HM10_BottomLEDThread(void* argument)
 {
     while (1)
     {
-        osSemaphoreAcquire(hm10BottomLED, osWaitForever);
+        osSemaphoreAcquire(hm10_bottom_led_semaphore, osWaitForever);
         HAL_GPIO_TogglePin(GPIOJ, GPIO_PIN_2);
         osDelay(100);
         HAL_GPIO_TogglePin(GPIOJ, GPIO_PIN_2);
@@ -432,7 +434,7 @@ void HM10_Thread(void* argument)
     while (1)
     {
         // Wait until the next render instruction is posted
-        osMessageQueueGet(hm10RenderInstructionQueue, &packet, NULL, osWaitForever);
+        osMessageQueueGet(hm10_render_queue, &packet, NULL, osWaitForever);
 
         switch (packet.widget_state)
         {
@@ -614,8 +616,8 @@ int main(void)
     /* USER CODE END RTOS_MUTEX */
 
     /* USER CODE BEGIN RTOS_SEMAPHORES */
-    hm10TopLED = osSemaphoreNew(1, 0, NULL);
-    hm10BottomLED = osSemaphoreNew(1, 0, NULL);
+    hm10_top_led_semaphore = osSemaphoreNew(1, 0, NULL);
+    hm10_bottom_led_semaphore = osSemaphoreNew(1, 0, NULL);
     /* USER CODE END RTOS_SEMAPHORES */
 
     /* USER CODE BEGIN RTOS_TIMERS */
@@ -623,7 +625,7 @@ int main(void)
     /* USER CODE END RTOS_TIMERS */
 
     /* USER CODE BEGIN RTOS_QUEUES */
-    hm10RenderInstructionQueue = osMessageQueueNew(16, sizeof(TrailGui_RenderWidgetPacket), NULL);
+    hm10_render_queue = osMessageQueueNew(16, sizeof(TrailGui_RenderWidgetPacket), NULL);
     HAL_UART_Receive_IT(&huart1, &hm10_uart_rx_byte, 1U);
 
     hm10_connection_state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
@@ -636,7 +638,7 @@ int main(void)
     initial_render_packet.widget_state = (hm10_connection_state == GPIO_PIN_SET)
                                               ? RENDER_WIDGET_STATE_CONNECTED
                                               : RENDER_WIDGET_STATE_IDLE;
-    osMessageQueuePut(hm10RenderInstructionQueue, &initial_render_packet, 0U, 0U);
+    osMessageQueuePut(hm10_render_queue, &initial_render_packet, 0U, 0U);
 
     HAL_NVIC_SetPriority(EXTI3_IRQn, 6, 0);
     HAL_NVIC_EnableIRQ(EXTI3_IRQn);
@@ -951,12 +953,12 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart)
             {
                 if (strcmp(hm10_isr_line, DEBUG_TERMINAL_PING_REPLY) == 0)
                 {
-                    osSemaphoreRelease(hm10BottomLED);
+                    osSemaphoreRelease(hm10_bottom_led_semaphore);
                     hm10_ping_reply_flag = 1U;
                 }
                 else
                 {
-                    osSemaphoreRelease(hm10TopLED);
+                    osSemaphoreRelease(hm10_top_led_semaphore);
                     HM10_DataPacket data_packet;
 
                     if (HM10_ParseDataPacket(hm10_isr_line, &data_packet) != 0U)
@@ -964,11 +966,11 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart)
                         TrailGui_RenderWidgetPacket render_packet;
                         render_packet.hm10_packet = data_packet;   /* copy by value into the message */
                         render_packet.widget_state = RENDER_WIDGET_STATE_ACTIVE;
-                        osMessageQueuePut(hm10RenderInstructionQueue, &render_packet, 0U, 0U);
+                        osMessageQueuePut(hm10_render_queue, &render_packet, 0U, 0U);
 
                         if (debug_terminal_mode == DEBUG_TERMINAL_MODE_HM10_DATA)
                         {
-                            DebugTerminal_ParsePhonePacket(&huart3, hm10_isr_line);
+                            render_packet.widget_state = RENDER_WIDGET_STATE_ACTIVE;
                         }
                     }
                 }
@@ -979,7 +981,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart)
             return;
         }
 
-        if (hm10_isr_line_len < (BLE_RX_LINE_SIZE - 1U))
+        if (hm10_isr_line_len < (HM10_DEFAULT_LINE_SIZE - 1U))
         {
             hm10_isr_line[hm10_isr_line_len++] = (char)byte;
         }
@@ -1014,7 +1016,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
         render_packet.widget_state = (hm10_connection_state == GPIO_PIN_SET)
                                           ? RENDER_WIDGET_STATE_CONNECTED
                                           : RENDER_WIDGET_STATE_IDLE;
-        osMessageQueuePut(hm10RenderInstructionQueue, &render_packet, 0U, 0U);
+        osMessageQueuePut(hm10_render_queue, &render_packet, 0U, 0U);
     }
 }
 

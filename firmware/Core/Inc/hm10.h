@@ -10,6 +10,7 @@ extern "C" {
 #include "stm32h7xx_hal.h"
 #include <stdint.h>
 
+#define HM10_DEFAULT_LINE_SIZE 220U
 #define HM10_DEFAULT_TIMEOUT_MS 100U
 #define HM10_DEFAULT_INTER_BYTE_TIMEOUT_MS 5U
 

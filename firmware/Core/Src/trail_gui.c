@@ -209,12 +209,20 @@ static uint16_t TrailGui_CircleInsetForRow(uint16_t radius_px, uint16_t distance
 
     radius_squared = (uint32_t)radius_px * (uint32_t)radius_px;
     distance_squared = (uint32_t)distance_from_corner_center_px * (uint32_t)distance_from_corner_center_px;
-    x_extent = radius_px;
 
-    while ((x_extent > 0U) && (((x_extent * x_extent) + distance_squared) > radius_squared))
+    /*
+     * x_extent is the largest integer such that
+     * x_extent^2 + distance_squared <= radius_squared, i.e.
+     * floor(sqrt(radius_squared - distance_squared)). Using sqrtf directly
+     * (the FPU already does float sqrt for the quaternion math below) turns
+     * this into one O(1) call instead of a per-pixel decrementing search.
+     */
+    if (distance_squared >= radius_squared)
     {
-        x_extent--;
+        return radius_px;
     }
+
+    x_extent = (uint32_t)sqrtf((float)(radius_squared - distance_squared));
 
     return (uint16_t)((uint32_t)radius_px - x_extent);
 }
@@ -830,9 +838,6 @@ void TrailGui_RenderPhoneCuboid(const HM10_DataPacket* hm10_packet,
         return;
     }
 
-    /* model_radius is a compile-time-constant geometric property of the fixed
-     * model_vertices, so it is precomputed once instead of recomputed every
-     * call. */
     static const float model_radius_const =
         TRAIL_GUI_PHONE_MODEL_HALF_WIDTH * TRAIL_GUI_PHONE_MODEL_HALF_WIDTH
         + TRAIL_GUI_PHONE_MODEL_HALF_HEIGHT * TRAIL_GUI_PHONE_MODEL_HALF_HEIGHT
@@ -875,20 +880,30 @@ void TrailGui_RenderPhoneCuboid(const HM10_DataPacket* hm10_packet,
     }
 }
 
+/**
+ * @brief Draws formatted phone latitude/longitude text inside a bounding box.
+ * @param hm10_packet Parsed phone data packet; NULL is not allowed.
+ * @param bounding_box LCD region for the text. Reversed bounds are normalized
+ *                     internally; out-of-screen bounds are clipped.
+ * @param color ARGB8888 LCD color value used for the text.
+ * @return None.
+ */
 void TrailGui_RenderPhoneGps(const HM10_DataPacket* hm10_packet,
                              TrailGui_BoundingBox bounding_box,
                              uint32_t color)
 {
-    if (hm10_packet == NULL)
+    char value[20];
+    char text[32];
+    uint16_t y_mid;
+    uint16_t x_mid;
+
+    if ((hm10_packet == NULL) || (TrailGui_NormalizeAndClipBoundingBox(&bounding_box) == 0U))
     {
         return;
     }
 
-    char value[20];
-    char text[32];
-
-    const uint16_t y = (bounding_box.y_min + bounding_box.y_max) / 2U - 5U;
-    const uint16_t x_mid = (bounding_box.x_max - bounding_box.x_min) / 2U;
+    y_mid = (bounding_box.y_min + bounding_box.y_max) / 2U - 5U;
+    x_mid = (bounding_box.x_max - bounding_box.x_min) / 2U;
 
     UTIL_LCD_SetFont(&Font12);
     UTIL_LCD_SetTextColor(color);
@@ -896,11 +911,11 @@ void TrailGui_RenderPhoneGps(const HM10_DataPacket* hm10_packet,
 
     DebugTerminal_FormatFixed(value, sizeof(value), hm10_packet->lat_deg, 6U, 10U);
     snprintf(text, sizeof(text), "LAT:%s", value);
-    UTIL_LCD_DisplayStringAt(bounding_box.x_min, y, (uint8_t *)text, LEFT_MODE);
+    UTIL_LCD_DisplayStringAt(bounding_box.x_min, y_mid, (uint8_t *)text, LEFT_MODE);
 
     DebugTerminal_FormatFixed(value, sizeof(value), hm10_packet->lon_deg, 6U, 10U);
     snprintf(text, sizeof(text), "LON:%s", value);
-    UTIL_LCD_DisplayStringAt(bounding_box.x_min + x_mid, y, (uint8_t *)text, LEFT_MODE);
+    UTIL_LCD_DisplayStringAt(bounding_box.x_min + x_mid, y_mid, (uint8_t *)text, LEFT_MODE);
 }
 
 /**
