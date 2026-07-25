@@ -1,6 +1,5 @@
 package com.trailhud.app.ble
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
@@ -10,14 +9,27 @@ import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
-import android.content.pm.PackageManager
 import android.os.Build
-import androidx.core.content.ContextCompat
 import com.trailhud.app.protocol.TrailHudPacket
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 
-class Hm10BleClient(
+/**
+ * BLE UART client for the STM32's Bluetooth module.
+ *
+ * The firmware's wiring notes call the module "HM-10 / AT-09" and mention
+ * scanning for "BT05 or the configured HM-10 name" - and that lines up with
+ * how these modules are actually described in the hobbyist ecosystem: the
+ * HM-10, AT-09, and BT05/MLT-BT05 are commonly built around the same TI
+ * CC2540/CC2541 BLE SoC, are sold interchangeably as "HM-10 compatible"
+ * drop-ins, and expose the same custom UART service (0xFFE0) and
+ * characteristic (0xFFE1) used below. There have been reported one-way
+ * compatibility quirks between older HM-10 firmware and BT05/AT-09 clones,
+ * said to be resolved from HM-10 firmware V700 onward, but the module
+ * families are otherwise treated as compatible. So this class is named
+ * after the app/protocol rather than one specific chip.
+ */
+class TrailHudBleClient(
     private val context: Context,
     private val onReady: () -> Unit,
     private val onDisconnected: () -> Unit,
@@ -40,7 +52,7 @@ class Hm10BleClient(
             }
 
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                if (hasBluetoothConnectPermission()) {
+                if (context.hasBluetoothConnectPermission()) {
                     gatt.discoverServices()
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
@@ -127,7 +139,7 @@ class Hm10BleClient(
     }
 
     fun connect(device: BluetoothDevice) {
-        if (!hasBluetoothConnectPermission()) {
+        if (!context.hasBluetoothConnectPermission()) {
             onError("Missing BLUETOOTH_CONNECT permission")
             return
         }
@@ -143,7 +155,7 @@ class Hm10BleClient(
         txCharacteristic = null
         rxLineBuilder.clear()
 
-        if (hasBluetoothConnectPermission()) {
+        if (context.hasBluetoothConnectPermission()) {
             gatt?.disconnect()
             gatt?.close()
         }
@@ -166,7 +178,7 @@ class Hm10BleClient(
 
     @SuppressLint("MissingPermission")
     fun readRemoteRssi() {
-        if (hasBluetoothConnectPermission()) {
+        if (context.hasBluetoothConnectPermission()) {
             gatt?.readRemoteRssi()
         }
     }
@@ -185,7 +197,7 @@ class Hm10BleClient(
             else -> return false
         }
 
-        if (!hasBluetoothConnectPermission()) {
+        if (!context.hasBluetoothConnectPermission()) {
             onError("Missing BLUETOOTH_CONNECT permission")
             return false
         }
@@ -225,7 +237,7 @@ class Hm10BleClient(
         val currentGatt = gatt ?: return
         val characteristic = txCharacteristic ?: return
 
-        if (isWriting || pendingChunks.isEmpty() || !hasBluetoothConnectPermission()) {
+        if (isWriting || pendingChunks.isEmpty() || !context.hasBluetoothConnectPermission()) {
             return
         }
 
@@ -295,15 +307,10 @@ class Hm10BleClient(
         }
     }
 
-    private fun hasBluetoothConnectPermission(): Boolean {
-        return Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-                ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.BLUETOOTH_CONNECT
-                ) == PackageManager.PERMISSION_GRANTED
-    }
-
     companion object {
+        // The custom UART service/characteristic pair standardized by the
+        // HM-10 and shared by its AT-09/BT05 compatible clones (see the
+        // class doc comment above).
         private val HM10_SERVICE_UUID: UUID =
             UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb")
         private val HM10_CHARACTERISTIC_UUID: UUID =
