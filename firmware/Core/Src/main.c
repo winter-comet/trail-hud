@@ -147,10 +147,15 @@ typedef struct
 #define PHONE_RENDER_LINE_WIDTH 1U
 #define PHONE_RENDER_LINE_COLOR UTIL_LCD_COLOR_WHITE
 #define PHONE_RENDER_CLEAR_COLOR UTIL_LCD_COLOR_BLACK
+#define TILT_RENDER_UPDATE_PERIOD_MS 100U
+#define TILT_RENDER_LINE_WIDTH TRAIL_GUI_LINE_WIDTH_THIN
+#define TILT_RENDER_LINE_COLOR UTIL_LCD_COLOR_BLACK
+#define TILT_RENDER_CLEAR_COLOR UTIL_LCD_COLOR_WHITE
 #define LED_HANDLE_COUNT 3U
 
 #define TRAIL_GUI_PHONE_RENDER_MARGIN 6U
 #define TRAIL_GUI_PHONE_RENDER_PADDING 12U
+#define TRAIL_GUI_TILT_RENDER_MARGIN 6U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -209,6 +214,14 @@ static const TrailGui_BoundingBox phone_gps_padding_bounds = {
     .y_min = phone_gps_bounds.y_min - TRAIL_GUI_PHONE_RENDER_PADDING / 2,
     .y_max = phone_gps_bounds.y_max + TRAIL_GUI_PHONE_RENDER_PADDING / 2,
 };
+/* Inset from the gyroscope panel so the clear pass never paints over its
+ * rounded corners, and so the widget stays centered on the panel itself. */
+static const TrailGui_BoundingBox tilt_render_bounds = {
+    .x_min = TRAIL_GUI_GYROSCOPE_BACKGROUND_X_MIN + TRAIL_GUI_TILT_RENDER_MARGIN,
+    .x_max = TRAIL_GUI_GYROSCOPE_BACKGROUND_X_MAX - TRAIL_GUI_TILT_RENDER_MARGIN,
+    .y_min = TRAIL_GUI_GYROSCOPE_BACKGROUND_Y_MIN + TRAIL_GUI_TILT_RENDER_MARGIN,
+    .y_max = TRAIL_GUI_GYROSCOPE_BACKGROUND_Y_MAX - TRAIL_GUI_TILT_RENDER_MARGIN,
+};
 
 const osThreadAttr_t MainThread_attributes = {
     .name = "MainThread",
@@ -235,6 +248,8 @@ void MainThread(void* argument);
 /* USER CODE BEGIN PFP */
 static void DebugTask_ClearPhoneRenderArea(void);
 static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet);
+static void DebugTask_RenderTiltFrame(void);
+static void DebugTask_UpdateTiltFrame(uint32_t* last_tick);
 static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms);
 static void DebugTask_RunPingSequence(volatile DebugTerminalMode* debug_mode);
 static void DebugTask_PrintMpu6050Data(uint32_t* last_tick);
@@ -301,6 +316,51 @@ static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
                              PHONE_RENDER_LINE_WIDTH,
                              PHONE_RENDER_LINE_COLOR);
     TrailGui_RenderPhoneGps(hm10_packet, phone_gps_bounds, UTIL_LCD_COLOR_WHITE);
+}
+
+/**
+ * @brief Redraws the tilt indicator widget from one fresh MPU-6050 sample.
+ * @return None.
+ *
+ * The previous frame is erased before the new one is drawn, so the widget area
+ * is left filled with TILT_RENDER_CLEAR_COLOR and never accumulates leftovers
+ * from an earlier angle. A failed sensor read leaves the last drawn frame on
+ * the LCD instead of blanking the widget.
+ */
+static void DebugTask_RenderTiltFrame(void)
+{
+    MPU6050_DataPacket packet;
+
+    if (MPU6050_ReadDataPacket(&mpu6050, &packet) != MPU6050_OK)
+    {
+        return;
+    }
+
+    TrailGui_DrawRoundedRectangle(tilt_render_bounds, 0U, TILT_RENDER_CLEAR_COLOR);
+    TrailGui_RenderTiltIndicator(&packet,
+                                 tilt_render_bounds,
+                                 TILT_RENDER_LINE_WIDTH,
+                                 TILT_RENDER_LINE_COLOR,
+                                 TILT_RENDER_CLEAR_COLOR);
+}
+
+/**
+ * @brief Redraws the tilt indicator widget at a fixed periodic interval.
+ * @param last_tick Pointer to the HAL tick value recorded at the last redraw.
+ *                  NULL is not allowed. Updated to the current tick after each
+ *                  redraw attempt, whether the sensor read succeeds or fails.
+ * @return None.
+ */
+static void DebugTask_UpdateTiltFrame(uint32_t* last_tick)
+{
+    if ((HAL_GetTick() - *last_tick) < TILT_RENDER_UPDATE_PERIOD_MS)
+    {
+        return;
+    }
+
+    DebugTask_RenderTiltFrame();
+
+    *last_tick = HAL_GetTick();
 }
 
 /**
@@ -471,12 +531,14 @@ void HM10_Thread(void* argument)
 void MainThread(void* argument)
 {
     uint32_t last_mpu6050_tick = HAL_GetTick() - MPU6050_DEBUG_UPDATE_PERIOD_MS;
+    uint32_t last_tilt_tick = HAL_GetTick();
 
     DebugTerminal_PrintMode(&huart3, debug_terminal_mode);
 
     while (1)
     {
         DebugTerminal_HandleInput(&huart3, &debug_terminal_mode);
+        DebugTask_UpdateTiltFrame(&last_tilt_tick);
 
         switch (debug_terminal_mode)
         {
@@ -596,6 +658,7 @@ int main(void)
     HAL_Delay(1000U);
 
     TrailGui_DrawDefaultScreen();
+    DebugTask_RenderTiltFrame();
     TrailGui_DrawBoundingRectangle(phone_render_padding_bounds, 10U, UTIL_LCD_COLOR_WHITE);
     TrailGui_DrawBoundingRectangle(phone_gps_padding_bounds, 10U, UTIL_LCD_COLOR_WHITE);
 
@@ -937,7 +1000,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart)
     {
         uint8_t byte = hm10_uart_rx_byte;
 
-        // Re-arm immediately so no bytes are missed
         HAL_UART_Receive_IT(&huart1, &hm10_uart_rx_byte, 1U);
 
         if (byte == '\r')
@@ -964,14 +1026,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart)
                     if (HM10_ParseDataPacket(hm10_isr_line, &data_packet) != 0U)
                     {
                         TrailGui_RenderWidgetPacket render_packet;
-                        render_packet.hm10_packet = data_packet;   /* copy by value into the message */
+                        render_packet.hm10_packet = data_packet;
                         render_packet.widget_state = RENDER_WIDGET_STATE_ACTIVE;
                         osMessageQueuePut(hm10_render_queue, &render_packet, 0U, 0U);
-
-                        if (debug_terminal_mode == DEBUG_TERMINAL_MODE_HM10_DATA)
-                        {
-                            render_packet.widget_state = RENDER_WIDGET_STATE_ACTIVE;
-                        }
                     }
                 }
             }

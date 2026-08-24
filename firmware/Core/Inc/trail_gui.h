@@ -17,6 +17,10 @@ extern "C" {
 #define TRAIL_GUI_COLOR_LIGHT_OLIVE 0xFF607036UL
 #define TRAIL_GUI_SCREEN_WIDTH 480U
 #define TRAIL_GUI_SCREEN_HEIGHT 272U
+#define TRAIL_GUI_GYROSCOPE_BACKGROUND_X_MIN 6U
+#define TRAIL_GUI_GYROSCOPE_BACKGROUND_X_MAX 233U
+#define TRAIL_GUI_GYROSCOPE_BACKGROUND_Y_MIN 44U
+#define TRAIL_GUI_GYROSCOPE_BACKGROUND_Y_MAX 265U
 
 /**
  * @brief Stores one point in LCD pixel coordinates.
@@ -180,6 +184,33 @@ void TrailGui_RenderPhoneCuboid(const HM10_DataPacket* hm10_packet,
 void TrailGui_RenderPhoneGps(const HM10_DataPacket* hm10_packet,
                              TrailGui_BoundingBox bounding_box,
                              uint32_t color);
+
+/**
+ * @brief Draws the tilt indicator widget for one MPU-6050 sample.
+ * @param mpu6050_packet Parsed MPU-6050 data packet. NULL is not allowed. The
+ *                       scaled accelerometer fields are the sole tilt source, so
+ *                       the reading is gravity referenced and does not drift the
+ *                       way an integrated gyroscope rate would.
+ * @param bounding_box LCD region that contains the complete widget. Reversed
+ *                     bounds are normalized internally, and out-of-screen bounds
+ *                     are clipped. The widget is centered inside this region and
+ *                     stays inside it. Regions too small to hold the widget are
+ *                     left unchanged.
+ * @param line_width Indicator line thickness in pixels. A value of 0 leaves the
+ *                   screen unchanged.
+ * @param color ARGB8888 LCD color value used for every widget line and glyph.
+ * @param background_color ARGB8888 LCD color value that already fills the
+ *                         bounding box. Used behind the readout glyphs and
+ *                         inside the degree ring; the widget never clears the
+ *                         region itself, so the caller stays in charge of
+ *                         erasing the previous frame.
+ * @return None.
+ */
+void TrailGui_RenderTiltIndicator(const MPU6050_DataPacket* mpu6050_packet,
+                                  TrailGui_BoundingBox bounding_box,
+                                  uint16_t line_width,
+                                  uint32_t color,
+                                  uint32_t background_color);
 
 #ifdef __cplusplus
 }

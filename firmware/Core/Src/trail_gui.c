@@ -6,6 +6,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 #define TRAIL_GUI_TITLE "TRAIL-HUD"
 #define TRAIL_GUI_PHONE_MODEL_HALF_WIDTH 0.38f
@@ -13,7 +14,16 @@
 #define TRAIL_GUI_PHONE_MODEL_HALF_DEPTH 0.055f
 #define TRAIL_GUI_PHONE_MODEL_RADIUS_RATIO 0.38f
 #define TRAIL_GUI_DEG_TO_RAD 0.01745329251994329577f
+#define TRAIL_GUI_RAD_TO_DEG 57.29577951308232087680f
 #define TRAIL_GUI_QUATERNION_EPSILON 0.000001f
+#define TRAIL_GUI_TILT_DIAL_RADIUS_RATIO 0.32f
+#define TRAIL_GUI_TILT_DATUM_LENGTH_RATIO 0.10f
+#define TRAIL_GUI_TILT_DATUM_GAP_RATIO 0.05f
+#define TRAIL_GUI_TILT_PIVOT_RADIUS_PX 5U
+#define TRAIL_GUI_TILT_READOUT_GAP_PX 14U
+#define TRAIL_GUI_TILT_READOUT_DECIMALS 1U
+#define TRAIL_GUI_TILT_RING_RADIUS_PX 4U
+#define TRAIL_GUI_TILT_RING_GAP_PX 6U
 #define TRAIL_GUI_LOADING_TITLE_X 48U
 #define TRAIL_GUI_LOADING_TITLE_Y 92U
 #define TRAIL_GUI_LOADING_BAR_X 44U
@@ -59,6 +69,13 @@ static TrailGui_Quaternion TrailGui_QuaternionNormalize(TrailGui_Quaternion quat
 static TrailGui_Matrix3 TrailGui_QuaternionToRotationMatrix(TrailGui_Quaternion quaternion);
 static TrailGui_Vector3 TrailGui_Mat3RotateVector(const TrailGui_Matrix3* matrix, TrailGui_Vector3 vector);
 static TrailGui_Quaternion TrailGui_BuildPhoneQuaternion(const HM10_DataPacket* hm10_packet);
+static float TrailGui_TiltAngleFromAccelerometer(const MPU6050_DataPacket* mpu6050_packet);
+static void TrailGui_DrawTiltReadout(TrailGui_BoundingBox bounding_box,
+                                     uint16_t top_y,
+                                     float tilt_deg,
+                                     uint16_t line_width,
+                                     uint32_t color,
+                                     uint32_t background_color);
 
 /**
  * @brief Normalizes and clips a bounding box to the LCD screen area.
@@ -919,6 +936,208 @@ void TrailGui_RenderPhoneGps(const HM10_DataPacket* hm10_packet,
 }
 
 /**
+ * @brief Calculates the gravity-referenced tilt angle of one MPU-6050 sample.
+ * @param mpu6050_packet Parsed MPU-6050 data packet; NULL is not allowed. Only
+ *                       the scaled accelerometer fields are read, so the result
+ *                       is an absolute angle instead of an integrated gyroscope
+ *                       rate that would slowly drift away from level.
+ * @return Tilt angle in degrees in the range [-180, 180]. The value is the
+ *         rotation around the sensor X axis: 0 when the sensor lies flat,
+ *         positive when the sensor Y axis tilts down, and negative when the
+ *         sensor Y axis tilts up.
+ */
+static float TrailGui_TiltAngleFromAccelerometer(const MPU6050_DataPacket* mpu6050_packet)
+{
+    return atan2f(-mpu6050_packet->accel_y_g, mpu6050_packet->accel_z_g) * TRAIL_GUI_RAD_TO_DEG;
+}
+
+/**
+ * @brief Draws the numeric tilt readout followed by its degree ring.
+ * @param bounding_box Normalized widget bounds in LCD pixels. The readout block
+ *                     is centered horizontally inside these bounds and clamped
+ *                     to them when the formatted text is wider than the region.
+ * @param top_y Top row of the readout text in LCD pixel coordinates.
+ * @param tilt_deg Tilt angle in degrees to print.
+ * @param line_width Degree ring thickness in pixels. Values at or above
+ *                   TRAIL_GUI_TILT_RING_RADIUS_PX draw the ring as a solid dot.
+ * @param color ARGB8888 LCD color value used for the glyphs and the ring.
+ * @param background_color ARGB8888 LCD color value already filling the region,
+ *                         used behind the glyphs and inside the degree ring.
+ * @return None.
+ */
+static void TrailGui_DrawTiltReadout(TrailGui_BoundingBox bounding_box,
+                                     uint16_t top_y,
+                                     float tilt_deg,
+                                     uint16_t line_width,
+                                     uint32_t color,
+                                     uint32_t background_color)
+{
+    char text[12];
+    uint16_t text_width_px;
+    uint16_t block_width_px;
+    uint16_t text_x;
+    uint16_t ring_center_x;
+    uint16_t ring_center_y;
+
+    /*
+     * The bundled fonts only cover ASCII 0x20 to 0x7E, so the degree sign is
+     * drawn as a ring instead of printed. It is an outer disc punched out by a
+     * background-colored inner disc, which keeps the ring stroke matched to the
+     * indicator line without relying on stacked one-pixel circle outlines.
+     */
+    DebugTerminal_FormatFixed(text, sizeof(text), (double)tilt_deg, TRAIL_GUI_TILT_READOUT_DECIMALS, 0U);
+
+    text_width_px = (uint16_t)(strlen(text) * Font24.Width);
+    block_width_px = (uint16_t)(text_width_px + TRAIL_GUI_TILT_RING_GAP_PX +
+        (2U * TRAIL_GUI_TILT_RING_RADIUS_PX) + 1U);
+    text_x = TrailGui_ClampInt32ToUint16((int32_t)bounding_box.x_min +
+                                             (((int32_t)TrailGui_GetBoundingBoxWidth(&bounding_box) -
+                                                 (int32_t)block_width_px) / 2),
+                                         bounding_box.x_min,
+                                         bounding_box.x_max);
+    ring_center_x = (uint16_t)(text_x + text_width_px + TRAIL_GUI_TILT_RING_GAP_PX +
+        TRAIL_GUI_TILT_RING_RADIUS_PX);
+    ring_center_y = (uint16_t)(top_y + (Font24.Height / 4U));
+
+    UTIL_LCD_SetFont(&Font24);
+    UTIL_LCD_SetTextColor(color);
+    UTIL_LCD_SetBackColor(background_color);
+    UTIL_LCD_DisplayStringAt(text_x, top_y, (uint8_t*)text, LEFT_MODE);
+
+    UTIL_LCD_FillCircle(ring_center_x, ring_center_y, TRAIL_GUI_TILT_RING_RADIUS_PX, color);
+
+    if (line_width < TRAIL_GUI_TILT_RING_RADIUS_PX)
+    {
+        UTIL_LCD_FillCircle(ring_center_x,
+                            ring_center_y,
+                            (uint32_t)(TRAIL_GUI_TILT_RING_RADIUS_PX - line_width),
+                            background_color);
+    }
+}
+
+/**
+ * @brief Draws the tilt indicator widget for one MPU-6050 sample.
+ * @param mpu6050_packet Parsed MPU-6050 data packet. NULL is not allowed. The
+ *                       scaled accelerometer fields are the sole tilt source, so
+ *                       the reading is gravity referenced and does not drift the
+ *                       way an integrated gyroscope rate would.
+ * @param bounding_box LCD region that contains the complete widget. Reversed
+ *                     bounds are normalized internally, and out-of-screen bounds
+ *                     are clipped. The widget is centered inside this region and
+ *                     stays inside it. Regions too small to hold the widget are
+ *                     left unchanged.
+ * @param line_width Indicator line thickness in pixels. A value of 0 leaves the
+ *                   screen unchanged.
+ * @param color ARGB8888 LCD color value used for every widget line and glyph.
+ * @param background_color ARGB8888 LCD color value that already fills the
+ *                         bounding box. Used behind the readout glyphs and
+ *                         inside the degree ring; the widget never clears the
+ *                         region itself, so the caller stays in charge of
+ *                         erasing the previous frame.
+ * @return None.
+ */
+void TrailGui_RenderTiltIndicator(const MPU6050_DataPacket* mpu6050_packet,
+                                  TrailGui_BoundingBox bounding_box,
+                                  uint16_t line_width,
+                                  uint32_t color,
+                                  uint32_t background_color)
+{
+    TrailGui_Point indicator_start;
+    TrailGui_Point indicator_end;
+    uint16_t width_px;
+    uint16_t height_px;
+    uint16_t min_dimension_px;
+    uint16_t dial_radius_px;
+    uint16_t datum_length_px;
+    uint16_t datum_gap_px;
+    uint16_t datum_extent_px;
+    uint16_t widget_height_px;
+    uint16_t center_x;
+    uint16_t pivot_y;
+    uint16_t readout_y;
+    float tilt_deg;
+    float tilt_rad;
+    float offset_x;
+    float offset_y;
+
+    if ((mpu6050_packet == NULL) || (line_width == 0U))
+    {
+        return;
+    }
+
+    if (TrailGui_NormalizeAndClipBoundingBox(&bounding_box) == 0U)
+    {
+        return;
+    }
+
+    width_px = TrailGui_GetBoundingBoxWidth(&bounding_box);
+    height_px = TrailGui_GetBoundingBoxHeight(&bounding_box);
+    min_dimension_px = TrailGui_MinUint16(width_px, height_px);
+
+    dial_radius_px = (uint16_t)((float)min_dimension_px * TRAIL_GUI_TILT_DIAL_RADIUS_RATIO);
+    datum_length_px = (uint16_t)((float)min_dimension_px * TRAIL_GUI_TILT_DATUM_LENGTH_RATIO);
+    datum_gap_px = (uint16_t)((float)min_dimension_px * TRAIL_GUI_TILT_DATUM_GAP_RATIO);
+    datum_extent_px = (uint16_t)(dial_radius_px + datum_gap_px + datum_length_px);
+    widget_height_px = (uint16_t)((2U * dial_radius_px) + TRAIL_GUI_TILT_READOUT_GAP_PX + Font24.Height);
+
+    /*
+     * The widget is one vertically centered block: the rotating dial on top and
+     * the numeric readout underneath it. Rejecting regions that cannot hold the
+     * block keeps every coordinate derived below inside the bounding box, so no
+     * individual drawing step needs its own clipping pass.
+     */
+    if ((dial_radius_px == 0U) ||
+        (widget_height_px >= height_px) ||
+        (((2U * datum_extent_px) + 1U) > width_px))
+    {
+        return;
+    }
+
+    center_x = (uint16_t)(bounding_box.x_min + ((width_px - 1U) / 2U));
+    pivot_y = (uint16_t)(bounding_box.y_min + ((height_px - widget_height_px) / 2U) + dial_radius_px);
+    readout_y = (uint16_t)(pivot_y + dial_radius_px + TRAIL_GUI_TILT_READOUT_GAP_PX);
+
+    /*
+     * Quantizing to the printed resolution before any rendering keeps the drawn
+     * line and the printed number describing the same angle, and it also drops
+     * the "-0.0" that a tiny negative reading would otherwise format into.
+     */
+    tilt_deg = TrailGui_TiltAngleFromAccelerometer(mpu6050_packet);
+    tilt_deg = (float)TrailGui_RoundFloatToInt32(tilt_deg * 10.0f) / 10.0f;
+    tilt_rad = tilt_deg * TRAIL_GUI_DEG_TO_RAD;
+    offset_x = cosf(tilt_rad) * (float)dial_radius_px;
+    offset_y = sinf(tilt_rad) * (float)dial_radius_px;
+
+    indicator_start.x = TrailGui_ClampInt32ToUint16(TrailGui_RoundFloatToInt32((float)center_x - offset_x),
+                                                    bounding_box.x_min,
+                                                    bounding_box.x_max);
+    indicator_start.y = TrailGui_ClampInt32ToUint16(TrailGui_RoundFloatToInt32((float)pivot_y - offset_y),
+                                                    bounding_box.y_min,
+                                                    bounding_box.y_max);
+    indicator_end.x = TrailGui_ClampInt32ToUint16(TrailGui_RoundFloatToInt32((float)center_x + offset_x),
+                                                  bounding_box.x_min,
+                                                  bounding_box.x_max);
+    indicator_end.y = TrailGui_ClampInt32ToUint16(TrailGui_RoundFloatToInt32((float)pivot_y + offset_y),
+                                                  bounding_box.y_min,
+                                                  bounding_box.y_max);
+
+    /* Level datum, kept outside the dial so it never touches the tilted line. */
+    TrailGui_DrawLine((TrailGui_Point) {(uint16_t)(center_x - datum_extent_px), pivot_y},
+                      (TrailGui_Point) {(uint16_t)(center_x - dial_radius_px - datum_gap_px), pivot_y},
+                      line_width,
+                      color);
+    TrailGui_DrawLine((TrailGui_Point) {(uint16_t)(center_x + dial_radius_px + datum_gap_px), pivot_y},
+                      (TrailGui_Point) {(uint16_t)(center_x + datum_extent_px), pivot_y},
+                      line_width,
+                      color);
+
+    TrailGui_DrawLine(indicator_start, indicator_end, line_width, color);
+    UTIL_LCD_FillCircle(center_x, pivot_y, TRAIL_GUI_TILT_PIVOT_RADIUS_PX, color);
+
+    TrailGui_DrawTiltReadout(bounding_box, readout_y, tilt_deg, line_width, color, background_color);
+}
+
+/**
  * @brief Draws the default trail-hud LCD layout.
  * @param None.
  * @return None.
@@ -933,10 +1152,10 @@ void TrailGui_DrawDefaultScreen(void)
     };
 
     TrailGui_BoundingBox gyroscope_background = {
-        .x_min = 6U,
-        .x_max = 233U,
-        .y_min = 44U,
-        .y_max = 265U
+        .x_min = TRAIL_GUI_GYROSCOPE_BACKGROUND_X_MIN,
+        .x_max = TRAIL_GUI_GYROSCOPE_BACKGROUND_X_MAX,
+        .y_min = TRAIL_GUI_GYROSCOPE_BACKGROUND_Y_MIN,
+        .y_max = TRAIL_GUI_GYROSCOPE_BACKGROUND_Y_MAX
     };
 
     TrailGui_ClearScreen(UTIL_LCD_COLOR_BLACK);
