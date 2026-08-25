@@ -942,13 +942,28 @@ void TrailGui_RenderPhoneGps(const HM10_DataPacket* hm10_packet,
  *                       is an absolute angle instead of an integrated gyroscope
  *                       rate that would slowly drift away from level.
  * @return Tilt angle in degrees in the range [-180, 180]. The value is the
- *         rotation around the sensor X axis: 0 when the sensor lies flat,
- *         positive when the sensor Y axis tilts down, and negative when the
- *         sensor Y axis tilts up.
+ *         rotation around the sensor Z axis, matching an MPU-6050 mounted
+ *         upright so that its Z axis is horizontal and gravity therefore stays
+ *         in the X-Y plane. It reads 0 with the sensor Y axis pointing up and
+ *         90 with the sensor X axis pointing down, so a positive angle means
+ *         the sensor X axis has tilted down. The rotation is mirrored against
+ *         the raw sensor reading to match the installed orientation of the
+ *         module.
  */
 static float TrailGui_TiltAngleFromAccelerometer(const MPU6050_DataPacket* mpu6050_packet)
 {
-    return atan2f(-mpu6050_packet->accel_y_g, mpu6050_packet->accel_z_g) * TRAIL_GUI_RAD_TO_DEG;
+    /*
+     * Two mounting corrections ride along in this one call. Passing X before Y
+     * carries the quarter turn between the sensor axes and the upright
+     * position: rotating the pair a quarter turn adds 90 degrees to the angle,
+     * so the reading lands on the Y-axis-up reference without a separate
+     * addition, and it stays inside the [-180, 180] range atan2f already
+     * returns instead of having to be wrapped back afterwards. Negating X then
+     * mirrors the rotation, because the module faces the opposite way and
+     * would otherwise lean the indicator against the physical tilt. Both leave
+     * the level reading at 0, so neither disturbs the other.
+     */
+    return atan2f(-mpu6050_packet->accel_x_g, mpu6050_packet->accel_y_g) * TRAIL_GUI_RAD_TO_DEG;
 }
 
 /**
