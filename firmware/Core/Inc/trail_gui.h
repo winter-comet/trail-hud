@@ -11,12 +11,19 @@ extern "C" {
 
 #endif
 
-#define TRAIL_GUI_SCREEN_MARGIN 6U
-#define TRAIL_GUI_LINE_WIDTH_THIN 2U
-#define TRAIL_GUI_LINE_WIDTH_THICK (TRAIL_GUI_LINE_WIDTH_THIN * 2U)
-#define TRAIL_GUI_COLOR_LIGHT_OLIVE 0xFF607036UL
+/* Screen geometry -----------------------------------------------------------*/
 #define TRAIL_GUI_SCREEN_WIDTH 480U
 #define TRAIL_GUI_SCREEN_HEIGHT 272U
+#define TRAIL_GUI_SCREEN_MARGIN 6U
+
+/* Stroke widths -------------------------------------------------------------*/
+#define TRAIL_GUI_LINE_WIDTH_THIN 2U
+#define TRAIL_GUI_LINE_WIDTH_THICK (TRAIL_GUI_LINE_WIDTH_THIN * 2U)
+
+/* Colors --------------------------------------------------------------------*/
+#define TRAIL_GUI_COLOR_LIGHT_OLIVE 0xFF607036UL
+
+/* Panel bounds --------------------------------------------------------------*/
 #define TRAIL_GUI_GYROSCOPE_BACKGROUND_X_MIN 6U
 #define TRAIL_GUI_GYROSCOPE_BACKGROUND_X_MAX 233U
 #define TRAIL_GUI_GYROSCOPE_BACKGROUND_Y_MIN 44U
@@ -89,40 +96,18 @@ typedef struct
     TrailGui_RenderWidgetState widget_state;
 } TrailGui_RenderWidgetPacket;
 
-/**
- * @brief Clears the full LCD screen with one solid color.
- * @param color ARGB8888 LCD color value passed directly to the LCD utility
- *              driver.
- * @return None.
- */
-void TrailGui_ClearScreen(uint32_t color);
+/* Drawing primitives --------------------------------------------------------*/
 
 /**
- * @brief Draws the default trail-hud LCD layout.
- * @param None.
+ * @brief Draws a straight line segment between two points.
+ * @param start Start point of the line in LCD pixel coordinates.
+ * @param end End point of the line in LCD pixel coordinates.
+ * @param width Line thickness in pixels. A value of 0 leaves the screen
+ *              unchanged.
+ * @param color ARGB8888 LCD color value used to draw the line.
  * @return None.
  */
-void TrailGui_DrawDefaultScreen(void);
-
-/**
- * @brief Draws the initialization screen with an empty loading bar.
- * @param total_stage_count Number of equal loading stages in the full
- *                          initialization sequence. A value of 0 draws only
- *                          the empty bar frame.
- * @return None.
- */
-void TrailGui_DrawLoadingScreen(uint16_t total_stage_count);
-
-/**
- * @brief Renders the loading bar filled to the requested completed stage.
- * @param completed_stage_count Number of completed initialization stages. Values
- *                              greater than total_stage_count are clamped.
- * @param total_stage_count Total number of equal loading stages in the full
- *                          initialization sequence. A value of 0 draws an
- *                          empty bar.
- * @return None.
- */
-void TrailGui_ExpandLoadingBar(uint16_t completed_stage_count, uint16_t total_stage_count);
+void TrailGui_DrawLine(TrailGui_Point start, TrailGui_Point end, uint16_t width, uint32_t color);
 
 /**
  * @brief Draws a corner-only rectangle inside the supplied bounding box.
@@ -151,16 +136,7 @@ void TrailGui_DrawBoundingRectangle(TrailGui_BoundingBox bounding_box, uint16_t 
  */
 void TrailGui_DrawRoundedRectangle(TrailGui_BoundingBox bounding_box, uint16_t radius_px, uint32_t color);
 
-/**
- * @brief Draws a straight line segment between two points.
- * @param start Start point of the line in LCD pixel coordinates.
- * @param end End point of the line in LCD pixel coordinates.
- * @param width Line thickness in pixels. A value of 0 leaves the screen
- *              unchanged.
- * @param color ARGB8888 LCD color value used to draw the line.
- * @return None.
- */
-void TrailGui_DrawLine(TrailGui_Point start, TrailGui_Point end, uint16_t width, uint32_t color);
+/* Widgets -------------------------------------------------------------------*/
 
 /**
  * @brief Draws a line-only 3D cuboid representing the phone orientation.
@@ -181,6 +157,18 @@ void TrailGui_RenderPhoneCuboid(const HM10_DataPacket* hm10_packet,
                               uint16_t line_width,
                               uint32_t color);
 
+/**
+ * @brief Draws formatted phone latitude/longitude text inside a bounding box.
+ * @param hm10_packet Parsed phone data packet. NULL is not allowed. The phone
+ *                    location fields are the sole text source; no MPU-6050
+ *                    data is used.
+ * @param bounding_box LCD region for the text. Reversed bounds are normalized
+ *                     internally, and out-of-screen bounds are clipped. The
+ *                     latitude is drawn from the left edge and the longitude
+ *                     from the horizontal midpoint, both on one shared row.
+ * @param color ARGB8888 LCD color value used for the text.
+ * @return None.
+ */
 void TrailGui_RenderPhoneGps(const HM10_DataPacket* hm10_packet,
                              TrailGui_BoundingBox bounding_box,
                              uint32_t color);
@@ -211,6 +199,43 @@ void TrailGui_RenderTiltIndicator(const MPU6050_DataPacket* mpu6050_packet,
                                   uint16_t line_width,
                                   uint32_t color,
                                   uint32_t background_color);
+
+/* Screens -------------------------------------------------------------------*/
+
+/**
+ * @brief Clears the full LCD screen with one solid color.
+ * @param color ARGB8888 LCD color value passed directly to the LCD utility
+ *              driver.
+ * @return None.
+ */
+void TrailGui_ClearScreen(uint32_t color);
+
+/**
+ * @brief Draws the initialization screen with an empty loading bar.
+ * @param total_stage_count Number of equal loading stages in the full
+ *                          initialization sequence. A value of 0 draws only
+ *                          the empty bar frame.
+ * @return None.
+ */
+void TrailGui_DrawLoadingScreen(uint16_t total_stage_count);
+
+/**
+ * @brief Renders the loading bar filled to the requested completed stage.
+ * @param completed_stage_count Number of completed initialization stages. Values
+ *                              greater than total_stage_count are clamped.
+ * @param total_stage_count Total number of equal loading stages in the full
+ *                          initialization sequence. A value of 0 draws an
+ *                          empty bar.
+ * @return None.
+ */
+void TrailGui_ExpandLoadingBar(uint16_t completed_stage_count, uint16_t total_stage_count);
+
+/**
+ * @brief Draws the default trail-hud LCD layout.
+ * @param None.
+ * @return None.
+ */
+void TrailGui_DrawDefaultScreen(void);
 
 #ifdef __cplusplus
 }

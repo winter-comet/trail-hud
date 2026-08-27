@@ -137,25 +137,31 @@ typedef struct
     uint16_t GPIO_Pin;
     uint16_t GPIO_DefaultState;
 } LED_HandleTypeDef;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define MPU6050_DEBUG_UPDATE_PERIOD_MS 1000U
+/* Board and system --------------------------------------------------------*/
 #define TRAIL_HUD_LCD_INSTANCE 0U
 #define TRAIL_HUD_LOADING_STAGE_COUNT 4U
+#define LED_HANDLE_COUNT 3U
+#define MPU6050_DEBUG_UPDATE_PERIOD_MS 1000U
+
+/* Phone render ------------------------------------------------------------*/
+#define PHONE_RENDER_MARGIN 6U
+#define PHONE_RENDER_PADDING 12U
 #define PHONE_RENDER_LINE_WIDTH 1U
 #define PHONE_RENDER_LINE_COLOR UTIL_LCD_COLOR_WHITE
 #define PHONE_RENDER_CLEAR_COLOR UTIL_LCD_COLOR_BLACK
+
+/* Tilt indicator render ---------------------------------------------------*/
+#define TILT_RENDER_MARGIN 6U
 #define TILT_RENDER_UPDATE_PERIOD_MS 100U
 #define TILT_RENDER_LINE_WIDTH TRAIL_GUI_LINE_WIDTH_THIN
 #define TILT_RENDER_LINE_COLOR UTIL_LCD_COLOR_BLACK
 #define TILT_RENDER_CLEAR_COLOR UTIL_LCD_COLOR_WHITE
-#define LED_HANDLE_COUNT 3U
 
-#define TRAIL_GUI_PHONE_RENDER_MARGIN 6U
-#define TRAIL_GUI_PHONE_RENDER_PADDING 12U
-#define TRAIL_GUI_TILT_RENDER_MARGIN 6U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -191,36 +197,36 @@ static const LED_HandleTypeDef led_handles[LED_HANDLE_COUNT] = {
     {GPIOI, GPIO_PIN_13, GPIO_PIN_SET},
 };
 static const TrailGui_BoundingBox phone_render_bounds = {
-    .x_min = 241U + (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING),
-    .x_max = 479U - (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING),
-    .y_min = 0U + (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING),
-    .y_max = 239U - (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING),
+    .x_min = 241U + (PHONE_RENDER_MARGIN + PHONE_RENDER_PADDING),
+    .x_max = 479U - (PHONE_RENDER_MARGIN + PHONE_RENDER_PADDING),
+    .y_min = 0U + (PHONE_RENDER_MARGIN + PHONE_RENDER_PADDING),
+    .y_max = 239U - (PHONE_RENDER_MARGIN + PHONE_RENDER_PADDING),
 };
 static const TrailGui_BoundingBox phone_render_padding_bounds = {
-    .x_min = phone_render_bounds.x_min - TRAIL_GUI_PHONE_RENDER_PADDING,
-    .x_max = phone_render_bounds.x_max + TRAIL_GUI_PHONE_RENDER_PADDING,
-    .y_min = phone_render_bounds.y_min - TRAIL_GUI_PHONE_RENDER_PADDING,
-    .y_max = phone_render_bounds.y_max + TRAIL_GUI_PHONE_RENDER_PADDING,
+    .x_min = phone_render_bounds.x_min - PHONE_RENDER_PADDING,
+    .x_max = phone_render_bounds.x_max + PHONE_RENDER_PADDING,
+    .y_min = phone_render_bounds.y_min - PHONE_RENDER_PADDING,
+    .y_max = phone_render_bounds.y_max + PHONE_RENDER_PADDING,
 };
 static const TrailGui_BoundingBox phone_gps_bounds = {
     .x_min = phone_render_bounds.x_min,
     .x_max = phone_render_bounds.x_max,
-    .y_min = phone_render_padding_bounds.y_max + (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING / 2),
-    .y_max = 272U - (TRAIL_GUI_PHONE_RENDER_MARGIN + TRAIL_GUI_PHONE_RENDER_PADDING / 2),
+    .y_min = phone_render_padding_bounds.y_max + (PHONE_RENDER_MARGIN + PHONE_RENDER_PADDING / 2),
+    .y_max = 272U - (PHONE_RENDER_MARGIN + PHONE_RENDER_PADDING / 2),
 };
 static const TrailGui_BoundingBox phone_gps_padding_bounds = {
-    .x_min = phone_gps_bounds.x_min - TRAIL_GUI_PHONE_RENDER_PADDING,
-    .x_max = phone_gps_bounds.x_max + TRAIL_GUI_PHONE_RENDER_PADDING,
-    .y_min = phone_gps_bounds.y_min - TRAIL_GUI_PHONE_RENDER_PADDING / 2,
-    .y_max = phone_gps_bounds.y_max + TRAIL_GUI_PHONE_RENDER_PADDING / 2,
+    .x_min = phone_gps_bounds.x_min - PHONE_RENDER_PADDING,
+    .x_max = phone_gps_bounds.x_max + PHONE_RENDER_PADDING,
+    .y_min = phone_gps_bounds.y_min - PHONE_RENDER_PADDING / 2,
+    .y_max = phone_gps_bounds.y_max + PHONE_RENDER_PADDING / 2,
 };
 /* Inset from the gyroscope panel so the clear pass never paints over its
  * rounded corners, and so the widget stays centered on the panel itself. */
 static const TrailGui_BoundingBox tilt_render_bounds = {
-    .x_min = TRAIL_GUI_GYROSCOPE_BACKGROUND_X_MIN + TRAIL_GUI_TILT_RENDER_MARGIN,
-    .x_max = TRAIL_GUI_GYROSCOPE_BACKGROUND_X_MAX - TRAIL_GUI_TILT_RENDER_MARGIN,
-    .y_min = TRAIL_GUI_GYROSCOPE_BACKGROUND_Y_MIN + TRAIL_GUI_TILT_RENDER_MARGIN,
-    .y_max = TRAIL_GUI_GYROSCOPE_BACKGROUND_Y_MAX - TRAIL_GUI_TILT_RENDER_MARGIN,
+    .x_min = TRAIL_GUI_GYROSCOPE_BACKGROUND_X_MIN + TILT_RENDER_MARGIN,
+    .x_max = TRAIL_GUI_GYROSCOPE_BACKGROUND_X_MAX - TILT_RENDER_MARGIN,
+    .y_min = TRAIL_GUI_GYROSCOPE_BACKGROUND_Y_MIN + TILT_RENDER_MARGIN,
+    .y_max = TRAIL_GUI_GYROSCOPE_BACKGROUND_Y_MAX - TILT_RENDER_MARGIN,
 };
 
 const osThreadAttr_t MainThread_attributes = {
@@ -246,13 +252,24 @@ static void MX_I2C4_Init(void);
 void MainThread(void* argument);
 
 /* USER CODE BEGIN PFP */
-static void DebugTask_ClearPhoneRenderArea(void);
-static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet);
-static void DebugTask_RenderTiltFrame(void);
-static void DebugTask_UpdateTiltFrame(uint32_t* last_tick);
+/* Board helpers */
+static void LED_ToggleSequence(uint32_t delay_ms);
+
+/* LCD rendering */
+static void TrailHud_ClearPhoneRenderArea(void);
+static void TrailHud_RenderPhoneFrame(const HM10_DataPacket* hm10_packet);
+static void TrailHud_RenderTiltFrame(void);
+static void TrailHud_UpdateTiltFrame(uint32_t* last_tick);
+
+/* Debug terminal */
 static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms);
 static void DebugTask_RunPingSequence(volatile DebugTerminalMode* debug_mode);
 static void DebugTask_PrintMpu6050Data(uint32_t* last_tick);
+
+/* RTOS threads */
+void HM10_TopLEDThread(void* argument);
+void HM10_BottomLEDThread(void* argument);
+void HM10_Thread(void* argument);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -284,7 +301,7 @@ static void LED_ToggleSequence(uint32_t delay_ms)
  * @brief Fills the phone render area with the solid clear color.
  * @return None.
  */
-static void DebugTask_ClearPhoneRenderArea()
+static void TrailHud_ClearPhoneRenderArea(void)
 {
     TrailGui_DrawRoundedRectangle(phone_render_bounds, 0U, PHONE_RENDER_CLEAR_COLOR);
     TrailGui_DrawRoundedRectangle(phone_gps_bounds, 0U, PHONE_RENDER_CLEAR_COLOR);
@@ -298,7 +315,7 @@ static void DebugTask_ClearPhoneRenderArea()
  *                    link is not currently established.
  * @return None.
  */
-static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
+static void TrailHud_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
 {
     if (hm10_packet == NULL)
     {
@@ -310,7 +327,7 @@ static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
         return;
     }
 
-    DebugTask_ClearPhoneRenderArea();
+    TrailHud_ClearPhoneRenderArea();
     TrailGui_RenderPhoneCuboid(hm10_packet,
                              phone_render_bounds,
                              PHONE_RENDER_LINE_WIDTH,
@@ -327,7 +344,7 @@ static void DebugTask_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
  * from an earlier angle. A failed sensor read leaves the last drawn frame on
  * the LCD instead of blanking the widget.
  */
-static void DebugTask_RenderTiltFrame(void)
+static void TrailHud_RenderTiltFrame(void)
 {
     MPU6050_DataPacket packet;
 
@@ -351,14 +368,14 @@ static void DebugTask_RenderTiltFrame(void)
  *                  redraw attempt, whether the sensor read succeeds or fails.
  * @return None.
  */
-static void DebugTask_UpdateTiltFrame(uint32_t* last_tick)
+static void TrailHud_UpdateTiltFrame(uint32_t* last_tick)
 {
     if ((HAL_GetTick() - *last_tick) < TILT_RENDER_UPDATE_PERIOD_MS)
     {
         return;
     }
 
-    DebugTask_RenderTiltFrame();
+    TrailHud_RenderTiltFrame();
 
     *last_tick = HAL_GetTick();
 }
@@ -499,7 +516,7 @@ void HM10_Thread(void* argument)
         switch (packet.widget_state)
         {
         case RENDER_WIDGET_STATE_ACTIVE:
-            DebugTask_RenderPhoneFrame(&packet.hm10_packet);
+            TrailHud_RenderPhoneFrame(&packet.hm10_packet);
             break;
 
         case RENDER_WIDGET_STATE_CONNECTED:
@@ -509,7 +526,7 @@ void HM10_Thread(void* argument)
         case RENDER_WIDGET_STATE_IDLE:
         default:
             DebugTerminal_PrintLine(&huart3, "BLE: connection terminated");
-            DebugTask_ClearPhoneRenderArea();
+            TrailHud_ClearPhoneRenderArea();
 
             UTIL_LCD_SetFont(&Font12);
             UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
@@ -538,7 +555,7 @@ void MainThread(void* argument)
     while (1)
     {
         DebugTerminal_HandleInput(&huart3, &debug_terminal_mode);
-        DebugTask_UpdateTiltFrame(&last_tilt_tick);
+        TrailHud_UpdateTiltFrame(&last_tilt_tick);
 
         switch (debug_terminal_mode)
         {
@@ -658,7 +675,7 @@ int main(void)
     HAL_Delay(1000U);
 
     TrailGui_DrawDefaultScreen();
-    DebugTask_RenderTiltFrame();
+    TrailHud_RenderTiltFrame();
     TrailGui_DrawBoundingRectangle(phone_render_padding_bounds, 10U, UTIL_LCD_COLOR_WHITE);
     TrailGui_DrawBoundingRectangle(phone_gps_padding_bounds, 10U, UTIL_LCD_COLOR_WHITE);
 

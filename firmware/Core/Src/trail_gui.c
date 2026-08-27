@@ -8,14 +8,19 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Shared math ---------------------------------------------------------------*/
 #define TRAIL_GUI_TITLE "TRAIL-HUD"
+#define TRAIL_GUI_DEG_TO_RAD 0.01745329251994329577f
+#define TRAIL_GUI_RAD_TO_DEG 57.29577951308232087680f
+
+/* Phone render --------------------------------------------------------------*/
 #define TRAIL_GUI_PHONE_MODEL_HALF_WIDTH 0.38f
 #define TRAIL_GUI_PHONE_MODEL_HALF_HEIGHT 0.80f
 #define TRAIL_GUI_PHONE_MODEL_HALF_DEPTH 0.055f
 #define TRAIL_GUI_PHONE_MODEL_RADIUS_RATIO 0.38f
-#define TRAIL_GUI_DEG_TO_RAD 0.01745329251994329577f
-#define TRAIL_GUI_RAD_TO_DEG 57.29577951308232087680f
 #define TRAIL_GUI_QUATERNION_EPSILON 0.000001f
+
+/* Tilt indicator widget -----------------------------------------------------*/
 #define TRAIL_GUI_TILT_DIAL_RADIUS_RATIO 0.32f
 #define TRAIL_GUI_TILT_DATUM_LENGTH_RATIO 0.10f
 #define TRAIL_GUI_TILT_DATUM_GAP_RATIO 0.05f
@@ -24,6 +29,8 @@
 #define TRAIL_GUI_TILT_READOUT_DECIMALS 1U
 #define TRAIL_GUI_TILT_RING_RADIUS_PX 4U
 #define TRAIL_GUI_TILT_RING_GAP_PX 6U
+
+/* Loading screen ------------------------------------------------------------*/
 #define TRAIL_GUI_LOADING_TITLE_X 48U
 #define TRAIL_GUI_LOADING_TITLE_Y 92U
 #define TRAIL_GUI_LOADING_BAR_X 44U
@@ -53,22 +60,33 @@ typedef struct
     float z;
 } TrailGui_Quaternion;
 
-static uint8_t TrailGui_NormalizeAndClipBoundingBox(TrailGui_BoundingBox* bounding_box);
-static uint16_t TrailGui_GetBoundingBoxWidth(const TrailGui_BoundingBox* bounding_box);
-static uint16_t TrailGui_GetBoundingBoxHeight(const TrailGui_BoundingBox* bounding_box);
-static uint16_t TrailGui_ClampCornerLength(uint16_t corner_length_px, uint16_t width_px, uint16_t height_px);
-static uint16_t TrailGui_ClampRadius(uint16_t radius_px, uint16_t width_px, uint16_t height_px);
-static uint16_t TrailGui_CircleInsetForRow(uint16_t radius_px, uint16_t distance_from_corner_center_px);
+/* Scalar helpers */
 static int32_t TrailGui_Abs32(int32_t value);
-static void TrailGui_FillLinePoint(int32_t center_x, int32_t center_y, uint16_t width, uint32_t color);
 static uint16_t TrailGui_MinUint16(uint16_t lhs, uint16_t rhs);
 static int32_t TrailGui_RoundFloatToInt32(float value);
 static uint16_t TrailGui_ClampInt32ToUint16(int32_t value, uint16_t min_value, uint16_t max_value);
+
+/* Bounding box helpers */
+static uint8_t TrailGui_NormalizeAndClipBoundingBox(TrailGui_BoundingBox* bounding_box);
+static uint16_t TrailGui_GetBoundingBoxWidth(const TrailGui_BoundingBox* bounding_box);
+static uint16_t TrailGui_GetBoundingBoxHeight(const TrailGui_BoundingBox* bounding_box);
+
+/* Drawing primitives */
+static void TrailGui_FillLinePoint(int32_t center_x, int32_t center_y, uint16_t width, uint32_t color);
+static uint16_t TrailGui_ClampCornerLength(uint16_t corner_length_px, uint16_t width_px, uint16_t height_px);
+static uint16_t TrailGui_ClampRadius(uint16_t radius_px, uint16_t width_px, uint16_t height_px);
+static uint16_t TrailGui_CircleInsetForRow(uint16_t radius_px, uint16_t distance_from_corner_center_px);
+
+/* Rotation math */
 static TrailGui_Quaternion TrailGui_QuaternionIdentity(void);
 static TrailGui_Quaternion TrailGui_QuaternionNormalize(TrailGui_Quaternion quaternion);
 static TrailGui_Matrix3 TrailGui_QuaternionToRotationMatrix(TrailGui_Quaternion quaternion);
 static TrailGui_Vector3 TrailGui_Mat3RotateVector(const TrailGui_Matrix3* matrix, TrailGui_Vector3 vector);
+
+/* Phone widgets */
 static TrailGui_Quaternion TrailGui_BuildPhoneQuaternion(const HM10_DataPacket* hm10_packet);
+
+/* Tilt indicator widget */
 static float TrailGui_TiltAngleFromAccelerometer(const MPU6050_DataPacket* mpu6050_packet);
 static void TrailGui_DrawTiltReadout(TrailGui_BoundingBox bounding_box,
                                      uint16_t top_y,
@@ -76,6 +94,63 @@ static void TrailGui_DrawTiltReadout(TrailGui_BoundingBox bounding_box,
                                      uint16_t line_width,
                                      uint32_t color,
                                      uint32_t background_color);
+
+/* Scalar helpers ------------------------------------------------------------*/
+
+/**
+ * @brief Returns the absolute value of a signed 32-bit integer.
+ * @param value Signed 32-bit integer input value.
+ * @return Absolute value of value.
+ */
+static int32_t TrailGui_Abs32(int32_t value)
+{
+    return (value < 0) ? -value : value;
+}
+
+/**
+ * @brief Returns the smaller of two unsigned 16-bit integers.
+ * @param lhs First value to compare.
+ * @param rhs Second value to compare.
+ * @return lhs when lhs is smaller than rhs; otherwise rhs.
+ */
+static uint16_t TrailGui_MinUint16(uint16_t lhs, uint16_t rhs)
+{
+    return (lhs < rhs) ? lhs : rhs;
+}
+
+/**
+ * @brief Rounds a floating-point value to the nearest signed 32-bit integer.
+ * @param value Floating-point value to round.
+ * @return Nearest signed 32-bit integer.
+ */
+static int32_t TrailGui_RoundFloatToInt32(float value)
+{
+    return (value >= 0.0f) ? (int32_t)(value + 0.5f) : (int32_t)(value - 0.5f);
+}
+
+/**
+ * @brief Clamps a signed coordinate to an inclusive unsigned pixel interval.
+ * @param value Signed coordinate to clamp.
+ * @param min_value Minimum accepted coordinate.
+ * @param max_value Maximum accepted coordinate.
+ * @return value clamped to [min_value, max_value].
+ */
+static uint16_t TrailGui_ClampInt32ToUint16(int32_t value, uint16_t min_value, uint16_t max_value)
+{
+    if (value < (int32_t)min_value)
+    {
+        return min_value;
+    }
+
+    if (value > (int32_t)max_value)
+    {
+        return max_value;
+    }
+
+    return (uint16_t)value;
+}
+
+/* Bounding box helpers ------------------------------------------------------*/
 
 /**
  * @brief Normalizes and clips a bounding box to the LCD screen area.
@@ -149,346 +224,7 @@ static uint16_t TrailGui_GetBoundingBoxHeight(const TrailGui_BoundingBox* boundi
     return (uint16_t)(bounding_box->y_max - bounding_box->y_min + 1U);
 }
 
-/**
- * @brief Clamps a corner edge length so opposite corners do not overlap.
- * @param corner_length_px Requested corner edge length in pixels.
- * @param width_px Width of the target bounding box in pixels.
- * @param height_px Height of the target bounding box in pixels.
- * @return Clamped corner edge length in pixels.
- */
-static uint16_t TrailGui_ClampCornerLength(uint16_t corner_length_px, uint16_t width_px, uint16_t height_px)
-{
-    uint16_t max_length = width_px / 2U;
-
-    if ((height_px / 2U) < max_length)
-    {
-        max_length = height_px / 2U;
-    }
-
-    if (corner_length_px > max_length)
-    {
-        return max_length;
-    }
-
-    return corner_length_px;
-}
-
-/**
- * @brief Clamps a rounded-rectangle radius to fit inside the target rectangle.
- * @param radius_px Requested corner radius in pixels.
- * @param width_px Width of the target bounding box in pixels.
- * @param height_px Height of the target bounding box in pixels.
- * @return Clamped radius in pixels. Returns 0 when the rectangle is too small
- *         to draw rounded corners.
- */
-static uint16_t TrailGui_ClampRadius(uint16_t radius_px, uint16_t width_px, uint16_t height_px)
-{
-    uint16_t max_radius;
-
-    if ((width_px < 3U) || (height_px < 3U))
-    {
-        return 0U;
-    }
-
-    max_radius = (uint16_t)((width_px - 1U) / 2U);
-
-    if (((height_px - 1U) / 2U) < max_radius)
-    {
-        max_radius = (uint16_t)((height_px - 1U) / 2U);
-    }
-
-    if (radius_px > max_radius)
-    {
-        return max_radius;
-    }
-
-    return radius_px;
-}
-
-/**
- * @brief Calculates the horizontal inset needed for one rounded-corner row.
- * @param radius_px Radius of the rounded corner in pixels. A value of 0 returns
- *                  an inset of 0.
- * @param distance_from_corner_center_px Vertical distance from the rounded
- *                                       corner center row in pixels.
- * @return Horizontal inset in pixels for the selected row.
- */
-static uint16_t TrailGui_CircleInsetForRow(uint16_t radius_px, uint16_t distance_from_corner_center_px)
-{
-    uint32_t radius_squared;
-    uint32_t distance_squared;
-    uint32_t x_extent;
-
-    if (radius_px == 0U)
-    {
-        return 0U;
-    }
-
-    radius_squared = (uint32_t)radius_px * (uint32_t)radius_px;
-    distance_squared = (uint32_t)distance_from_corner_center_px * (uint32_t)distance_from_corner_center_px;
-
-    /*
-     * x_extent is the largest integer such that
-     * x_extent^2 + distance_squared <= radius_squared, i.e.
-     * floor(sqrt(radius_squared - distance_squared)). Using sqrtf directly
-     * (the FPU already does float sqrt for the quaternion math below) turns
-     * this into one O(1) call instead of a per-pixel decrementing search.
-     */
-    if (distance_squared >= radius_squared)
-    {
-        return radius_px;
-    }
-
-    x_extent = (uint32_t)sqrtf((float)(radius_squared - distance_squared));
-
-    return (uint16_t)((uint32_t)radius_px - x_extent);
-}
-
-/**
- * @brief Clears the full LCD screen with one solid color.
- * @param color ARGB8888 LCD color value passed directly to the LCD utility
- *              driver.
- * @return None.
- */
-void TrailGui_ClearScreen(uint32_t color)
-{
-    UTIL_LCD_Clear(color);
-}
-
-/**
- * @brief Draws the initialization screen with an empty loading bar.
- * @param total_stage_count Number of equal loading stages in the full
- *                          initialization sequence. A value of 0 draws only
- *                          the empty bar frame.
- * @return None.
- */
-void TrailGui_DrawLoadingScreen(uint16_t total_stage_count)
-{
-    TrailGui_ClearScreen(UTIL_LCD_COLOR_BLACK);
-
-    UTIL_LCD_SetFont(&Font24);
-    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_BLACK);
-    UTIL_LCD_DisplayStringAt(TRAIL_GUI_LOADING_TITLE_X,
-                             TRAIL_GUI_LOADING_TITLE_Y,
-                             (uint8_t*)TRAIL_GUI_TITLE,
-                             LEFT_MODE);
-
-    TrailGui_ExpandLoadingBar(0U, total_stage_count);
-}
-
-/**
- * @brief Renders the loading bar filled to the requested completed stage.
- * @param completed_stage_count Number of completed initialization stages. Values
- *                              greater than total_stage_count are clamped.
- * @param total_stage_count Total number of equal loading stages in the full
- *                          initialization sequence. A value of 0 draws an
- *                          empty bar.
- * @return None.
- */
-void TrailGui_ExpandLoadingBar(uint16_t completed_stage_count, uint16_t total_stage_count)
-{
-    uint32_t inner_x;
-    uint32_t inner_y;
-    uint32_t inner_width;
-    uint32_t inner_height;
-    uint32_t fill_width = 0U;
-
-    if (completed_stage_count > total_stage_count)
-    {
-        completed_stage_count = total_stage_count;
-    }
-
-    UTIL_LCD_FillRect(TRAIL_GUI_LOADING_BAR_X,
-                      TRAIL_GUI_LOADING_BAR_Y,
-                      TRAIL_GUI_LOADING_BAR_WIDTH,
-                      TRAIL_GUI_LOADING_BAR_HEIGHT,
-                      UTIL_LCD_COLOR_BLACK);
-
-    UTIL_LCD_FillRect(TRAIL_GUI_LOADING_BAR_X,
-                      TRAIL_GUI_LOADING_BAR_Y,
-                      TRAIL_GUI_LOADING_BAR_WIDTH,
-                      TRAIL_GUI_LOADING_BAR_BORDER_WIDTH,
-                      UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(TRAIL_GUI_LOADING_BAR_X,
-                      (uint32_t)(TRAIL_GUI_LOADING_BAR_Y + TRAIL_GUI_LOADING_BAR_HEIGHT -
-                          TRAIL_GUI_LOADING_BAR_BORDER_WIDTH),
-                      TRAIL_GUI_LOADING_BAR_WIDTH,
-                      TRAIL_GUI_LOADING_BAR_BORDER_WIDTH,
-                      UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(TRAIL_GUI_LOADING_BAR_X,
-                      TRAIL_GUI_LOADING_BAR_Y,
-                      TRAIL_GUI_LOADING_BAR_BORDER_WIDTH,
-                      TRAIL_GUI_LOADING_BAR_HEIGHT,
-                      UTIL_LCD_COLOR_WHITE);
-    UTIL_LCD_FillRect(
-        (uint32_t)(TRAIL_GUI_LOADING_BAR_X + TRAIL_GUI_LOADING_BAR_WIDTH - TRAIL_GUI_LOADING_BAR_BORDER_WIDTH),
-        TRAIL_GUI_LOADING_BAR_Y,
-        TRAIL_GUI_LOADING_BAR_BORDER_WIDTH,
-        TRAIL_GUI_LOADING_BAR_HEIGHT,
-        UTIL_LCD_COLOR_WHITE);
-
-    inner_x = TRAIL_GUI_LOADING_BAR_X + TRAIL_GUI_LOADING_BAR_BORDER_WIDTH + TRAIL_GUI_LOADING_BAR_PADDING;
-    inner_y = TRAIL_GUI_LOADING_BAR_Y + TRAIL_GUI_LOADING_BAR_BORDER_WIDTH + TRAIL_GUI_LOADING_BAR_PADDING;
-    inner_width = TRAIL_GUI_LOADING_BAR_WIDTH - (2U * (TRAIL_GUI_LOADING_BAR_BORDER_WIDTH +
-        TRAIL_GUI_LOADING_BAR_PADDING));
-    inner_height = TRAIL_GUI_LOADING_BAR_HEIGHT - (2U * (TRAIL_GUI_LOADING_BAR_BORDER_WIDTH +
-        TRAIL_GUI_LOADING_BAR_PADDING));
-
-    if (total_stage_count > 0U)
-    {
-        fill_width = (inner_width * (uint32_t)completed_stage_count) / (uint32_t)total_stage_count;
-    }
-
-    if (fill_width > inner_width)
-    {
-        fill_width = inner_width;
-    }
-
-    if (fill_width > 0U)
-    {
-        UTIL_LCD_FillRect(inner_x, inner_y, fill_width, inner_height, UTIL_LCD_COLOR_WHITE);
-    }
-}
-
-/**
- * @brief Draws a corner-only rectangle inside the supplied bounding box.
- * @param bounding_box Rectangle bounds in LCD pixels. x_min/y_min and x_max/y_max
- *                     are inclusive outer-edge coordinates. Reversed bounds are
- *                     normalized internally. Bounds outside the screen are
- *                     clipped.
- * @param corner_length_px Length of each visible corner edge in pixels. A value
- *                         of 0 leaves the screen unchanged.
- * @param color ARGB8888 LCD color value used for the corner lines.
- * @return None.
- */
-void TrailGui_DrawBoundingRectangle(TrailGui_BoundingBox bounding_box,
-                                    uint16_t corner_length_px,
-                                    uint32_t color)
-{
-    uint16_t min_x;
-    uint16_t max_x;
-    uint16_t min_y;
-    uint16_t max_y;
-    uint16_t width_px;
-    uint16_t height_px;
-    uint16_t length_px;
-
-    if (corner_length_px == 0U)
-    {
-        return;
-    }
-
-    if (TrailGui_NormalizeAndClipBoundingBox(&bounding_box) == 0U)
-    {
-        return;
-    }
-
-    width_px = TrailGui_GetBoundingBoxWidth(&bounding_box);
-    height_px = TrailGui_GetBoundingBoxHeight(&bounding_box);
-
-    if ((width_px < 2U) || (height_px < 2U))
-    {
-        return;
-    }
-
-    length_px = TrailGui_ClampCornerLength(corner_length_px, width_px, height_px);
-
-    if (length_px == 0U)
-    {
-        return;
-    }
-
-    min_x = bounding_box.x_min;
-    max_x = bounding_box.x_max;
-    min_y = bounding_box.y_min;
-    max_y = bounding_box.y_max;
-
-    /* Top-left corner. */
-    UTIL_LCD_DrawHLine(min_x, min_y, length_px, color);
-    UTIL_LCD_DrawVLine(min_x, min_y, length_px, color);
-
-    /* Top-right corner. */
-    UTIL_LCD_DrawHLine((uint32_t)(max_x - length_px + 1U), min_y, length_px, color);
-    UTIL_LCD_DrawVLine(max_x, min_y, length_px, color);
-
-    /* Bottom-left corner. */
-    UTIL_LCD_DrawHLine(min_x, max_y, length_px, color);
-    UTIL_LCD_DrawVLine(min_x, (uint32_t)(max_y - length_px + 1U), length_px, color);
-
-    /* Bottom-right corner. */
-    UTIL_LCD_DrawHLine((uint32_t)(max_x - length_px + 1U), max_y, length_px, color);
-    UTIL_LCD_DrawVLine(max_x, (uint32_t)(max_y - length_px + 1U), length_px, color);
-}
-
-/**
- * @brief Draws a filled rounded rectangle inside the supplied bounding box.
- * @param bounding_box Rectangle bounds in LCD pixels. x_min/y_min and x_max/y_max
- *                     are inclusive outer-edge coordinates. Reversed bounds are
- *                     normalized internally. Bounds outside the screen are
- *                     clipped. The drawn shape always stays inside this
- *                     bounding box.
- * @param radius_px Corner radius in pixels. Values larger than the useful half
- *                  extents of the rectangle are clamped automatically.
- * @param color ARGB8888 LCD color value used to fill the rounded rectangle.
- * @return None.
- */
-void TrailGui_DrawRoundedRectangle(TrailGui_BoundingBox bounding_box, uint16_t radius_px, uint32_t color)
-{
-    uint16_t width_px;
-    uint16_t height_px;
-    uint16_t clamped_radius_px;
-    uint16_t row;
-
-    if (TrailGui_NormalizeAndClipBoundingBox(&bounding_box) == 0U)
-    {
-        return;
-    }
-
-    width_px = TrailGui_GetBoundingBoxWidth(&bounding_box);
-    height_px = TrailGui_GetBoundingBoxHeight(&bounding_box);
-    clamped_radius_px = TrailGui_ClampRadius(radius_px, width_px, height_px);
-
-    if (clamped_radius_px == 0U)
-    {
-        UTIL_LCD_FillRect(bounding_box.x_min, bounding_box.y_min, width_px, height_px, color);
-        return;
-    }
-
-    for (row = 0U; row < height_px; row++)
-    {
-        uint16_t inset_px = 0U;
-        uint16_t distance_px;
-        uint16_t line_width_px;
-
-        if (row < clamped_radius_px)
-        {
-            distance_px = (uint16_t)(clamped_radius_px - row);
-            inset_px = TrailGui_CircleInsetForRow(clamped_radius_px, distance_px);
-        }
-        else if (row > (uint16_t)(height_px - clamped_radius_px - 1U))
-        {
-            distance_px = (uint16_t)(row - (height_px - clamped_radius_px - 1U));
-            inset_px = TrailGui_CircleInsetForRow(clamped_radius_px, distance_px);
-        }
-
-        line_width_px = (uint16_t)(width_px - (2U * inset_px));
-        UTIL_LCD_DrawHLine((uint32_t)(bounding_box.x_min + inset_px),
-                           (uint32_t)(bounding_box.y_min + row),
-                           line_width_px,
-                           color);
-    }
-}
-
-/**
- * @brief Returns the absolute value of a signed 32-bit integer.
- * @param value Signed 32-bit integer input value.
- * @return Absolute value of value.
- */
-static int32_t TrailGui_Abs32(int32_t value)
-{
-    return (value < 0) ? -value : value;
-}
+/* Drawing primitives --------------------------------------------------------*/
 
 /**
  * @brief Draws one clipped square sample used to create a thick line.
@@ -623,47 +359,230 @@ void TrailGui_DrawLine(TrailGui_Point start, TrailGui_Point end, uint16_t width,
 }
 
 /**
- * @brief Returns the smaller of two unsigned 16-bit integers.
- * @param lhs First value to compare.
- * @param rhs Second value to compare.
- * @return lhs when lhs is smaller than rhs; otherwise rhs.
+ * @brief Clamps a corner edge length so opposite corners do not overlap.
+ * @param corner_length_px Requested corner edge length in pixels.
+ * @param width_px Width of the target bounding box in pixels.
+ * @param height_px Height of the target bounding box in pixels.
+ * @return Clamped corner edge length in pixels.
  */
-static uint16_t TrailGui_MinUint16(uint16_t lhs, uint16_t rhs)
+static uint16_t TrailGui_ClampCornerLength(uint16_t corner_length_px, uint16_t width_px, uint16_t height_px)
 {
-    return (lhs < rhs) ? lhs : rhs;
+    uint16_t max_length = width_px / 2U;
+
+    if ((height_px / 2U) < max_length)
+    {
+        max_length = height_px / 2U;
+    }
+
+    if (corner_length_px > max_length)
+    {
+        return max_length;
+    }
+
+    return corner_length_px;
 }
 
 /**
- * @brief Rounds a floating-point value to the nearest signed 32-bit integer.
- * @param value Floating-point value to round.
- * @return Nearest signed 32-bit integer.
+ * @brief Draws a corner-only rectangle inside the supplied bounding box.
+ * @param bounding_box Rectangle bounds in LCD pixels. x_min/y_min and x_max/y_max
+ *                     are inclusive outer-edge coordinates. Reversed bounds are
+ *                     normalized internally. Bounds outside the screen are
+ *                     clipped.
+ * @param corner_length_px Length of each visible corner edge in pixels. A value
+ *                         of 0 leaves the screen unchanged.
+ * @param color ARGB8888 LCD color value used for the corner lines.
+ * @return None.
  */
-static int32_t TrailGui_RoundFloatToInt32(float value)
+void TrailGui_DrawBoundingRectangle(TrailGui_BoundingBox bounding_box,
+                                    uint16_t corner_length_px,
+                                    uint32_t color)
 {
-    return (value >= 0.0f) ? (int32_t)(value + 0.5f) : (int32_t)(value - 0.5f);
+    uint16_t min_x;
+    uint16_t max_x;
+    uint16_t min_y;
+    uint16_t max_y;
+    uint16_t width_px;
+    uint16_t height_px;
+    uint16_t length_px;
+
+    if (corner_length_px == 0U)
+    {
+        return;
+    }
+
+    if (TrailGui_NormalizeAndClipBoundingBox(&bounding_box) == 0U)
+    {
+        return;
+    }
+
+    width_px = TrailGui_GetBoundingBoxWidth(&bounding_box);
+    height_px = TrailGui_GetBoundingBoxHeight(&bounding_box);
+
+    if ((width_px < 2U) || (height_px < 2U))
+    {
+        return;
+    }
+
+    length_px = TrailGui_ClampCornerLength(corner_length_px, width_px, height_px);
+
+    if (length_px == 0U)
+    {
+        return;
+    }
+
+    min_x = bounding_box.x_min;
+    max_x = bounding_box.x_max;
+    min_y = bounding_box.y_min;
+    max_y = bounding_box.y_max;
+
+    /* Top-left corner. */
+    UTIL_LCD_DrawHLine(min_x, min_y, length_px, color);
+    UTIL_LCD_DrawVLine(min_x, min_y, length_px, color);
+
+    /* Top-right corner. */
+    UTIL_LCD_DrawHLine((uint32_t)(max_x - length_px + 1U), min_y, length_px, color);
+    UTIL_LCD_DrawVLine(max_x, min_y, length_px, color);
+
+    /* Bottom-left corner. */
+    UTIL_LCD_DrawHLine(min_x, max_y, length_px, color);
+    UTIL_LCD_DrawVLine(min_x, (uint32_t)(max_y - length_px + 1U), length_px, color);
+
+    /* Bottom-right corner. */
+    UTIL_LCD_DrawHLine((uint32_t)(max_x - length_px + 1U), max_y, length_px, color);
+    UTIL_LCD_DrawVLine(max_x, (uint32_t)(max_y - length_px + 1U), length_px, color);
 }
 
 /**
- * @brief Clamps a signed coordinate to an inclusive unsigned pixel interval.
- * @param value Signed coordinate to clamp.
- * @param min_value Minimum accepted coordinate.
- * @param max_value Maximum accepted coordinate.
- * @return value clamped to [min_value, max_value].
+ * @brief Clamps a rounded-rectangle radius to fit inside the target rectangle.
+ * @param radius_px Requested corner radius in pixels.
+ * @param width_px Width of the target bounding box in pixels.
+ * @param height_px Height of the target bounding box in pixels.
+ * @return Clamped radius in pixels. Returns 0 when the rectangle is too small
+ *         to draw rounded corners.
  */
-static uint16_t TrailGui_ClampInt32ToUint16(int32_t value, uint16_t min_value, uint16_t max_value)
+static uint16_t TrailGui_ClampRadius(uint16_t radius_px, uint16_t width_px, uint16_t height_px)
 {
-    if (value < (int32_t)min_value)
+    uint16_t max_radius;
+
+    if ((width_px < 3U) || (height_px < 3U))
     {
-        return min_value;
+        return 0U;
     }
 
-    if (value > (int32_t)max_value)
+    max_radius = (uint16_t)((width_px - 1U) / 2U);
+
+    if (((height_px - 1U) / 2U) < max_radius)
     {
-        return max_value;
+        max_radius = (uint16_t)((height_px - 1U) / 2U);
     }
 
-    return (uint16_t)value;
+    if (radius_px > max_radius)
+    {
+        return max_radius;
+    }
+
+    return radius_px;
 }
+
+/**
+ * @brief Calculates the horizontal inset needed for one rounded-corner row.
+ * @param radius_px Radius of the rounded corner in pixels. A value of 0 returns
+ *                  an inset of 0.
+ * @param distance_from_corner_center_px Vertical distance from the rounded
+ *                                       corner center row in pixels.
+ * @return Horizontal inset in pixels for the selected row.
+ */
+static uint16_t TrailGui_CircleInsetForRow(uint16_t radius_px, uint16_t distance_from_corner_center_px)
+{
+    uint32_t radius_squared;
+    uint32_t distance_squared;
+    uint32_t x_extent;
+
+    if (radius_px == 0U)
+    {
+        return 0U;
+    }
+
+    radius_squared = (uint32_t)radius_px * (uint32_t)radius_px;
+    distance_squared = (uint32_t)distance_from_corner_center_px * (uint32_t)distance_from_corner_center_px;
+
+    /*
+     * x_extent is the largest integer such that
+     * x_extent^2 + distance_squared <= radius_squared, i.e.
+     * floor(sqrt(radius_squared - distance_squared)). Using sqrtf directly
+     * (the FPU already does float sqrt for the quaternion math below) turns
+     * this into one O(1) call instead of a per-pixel decrementing search.
+     */
+    if (distance_squared >= radius_squared)
+    {
+        return radius_px;
+    }
+
+    x_extent = (uint32_t)sqrtf((float)(radius_squared - distance_squared));
+
+    return (uint16_t)((uint32_t)radius_px - x_extent);
+}
+
+/**
+ * @brief Draws a filled rounded rectangle inside the supplied bounding box.
+ * @param bounding_box Rectangle bounds in LCD pixels. x_min/y_min and x_max/y_max
+ *                     are inclusive outer-edge coordinates. Reversed bounds are
+ *                     normalized internally. Bounds outside the screen are
+ *                     clipped. The drawn shape always stays inside this
+ *                     bounding box.
+ * @param radius_px Corner radius in pixels. Values larger than the useful half
+ *                  extents of the rectangle are clamped automatically.
+ * @param color ARGB8888 LCD color value used to fill the rounded rectangle.
+ * @return None.
+ */
+void TrailGui_DrawRoundedRectangle(TrailGui_BoundingBox bounding_box, uint16_t radius_px, uint32_t color)
+{
+    uint16_t width_px;
+    uint16_t height_px;
+    uint16_t clamped_radius_px;
+    uint16_t row;
+
+    if (TrailGui_NormalizeAndClipBoundingBox(&bounding_box) == 0U)
+    {
+        return;
+    }
+
+    width_px = TrailGui_GetBoundingBoxWidth(&bounding_box);
+    height_px = TrailGui_GetBoundingBoxHeight(&bounding_box);
+    clamped_radius_px = TrailGui_ClampRadius(radius_px, width_px, height_px);
+
+    if (clamped_radius_px == 0U)
+    {
+        UTIL_LCD_FillRect(bounding_box.x_min, bounding_box.y_min, width_px, height_px, color);
+        return;
+    }
+
+    for (row = 0U; row < height_px; row++)
+    {
+        uint16_t inset_px = 0U;
+        uint16_t distance_px;
+        uint16_t line_width_px;
+
+        if (row < clamped_radius_px)
+        {
+            distance_px = (uint16_t)(clamped_radius_px - row);
+            inset_px = TrailGui_CircleInsetForRow(clamped_radius_px, distance_px);
+        }
+        else if (row > (uint16_t)(height_px - clamped_radius_px - 1U))
+        {
+            distance_px = (uint16_t)(row - (height_px - clamped_radius_px - 1U));
+            inset_px = TrailGui_CircleInsetForRow(clamped_radius_px, distance_px);
+        }
+
+        line_width_px = (uint16_t)(width_px - (2U * inset_px));
+        UTIL_LCD_DrawHLine((uint32_t)(bounding_box.x_min + inset_px),
+                           (uint32_t)(bounding_box.y_min + row),
+                           line_width_px,
+                           color);
+    }
+}
+
+/* Rotation math -------------------------------------------------------------*/
 
 /**
  * @brief Returns the identity quaternion.
@@ -703,24 +622,6 @@ static TrailGui_Quaternion TrailGui_QuaternionNormalize(TrailGui_Quaternion quat
     quaternion.z *= inv_length;
 
     return quaternion;
-}
-
-/**
- * @brief Builds the phone orientation quaternion from one HM-10 packet.
- * @param hm10_packet Parsed phone packet. NULL is not allowed.
- * @return Normalized phone quaternion, or identity when the packet values are
- *         unusable.
- */
-static TrailGui_Quaternion TrailGui_BuildPhoneQuaternion(const HM10_DataPacket* hm10_packet)
-{
-    TrailGui_Quaternion quaternion;
-
-    quaternion.w = (float)hm10_packet->qw;
-    quaternion.x = (float)hm10_packet->qx;
-    quaternion.y = (float)hm10_packet->qy;
-    quaternion.z = (float)hm10_packet->qz;
-
-    return TrailGui_QuaternionNormalize(quaternion);
 }
 
 /**
@@ -786,6 +687,26 @@ static TrailGui_Vector3 TrailGui_Mat3RotateVector(const TrailGui_Matrix3* matrix
     rotated.z = (matrix->m[2][0] * vector.x) + (matrix->m[2][1] * vector.y) + (matrix->m[2][2] * vector.z);
 
     return rotated;
+}
+
+/* Phone widgets -------------------------------------------------------------*/
+
+/**
+ * @brief Builds the phone orientation quaternion from one HM-10 packet.
+ * @param hm10_packet Parsed phone packet. NULL is not allowed.
+ * @return Normalized phone quaternion, or identity when the packet values are
+ *         unusable.
+ */
+static TrailGui_Quaternion TrailGui_BuildPhoneQuaternion(const HM10_DataPacket* hm10_packet)
+{
+    TrailGui_Quaternion quaternion;
+
+    quaternion.w = (float)hm10_packet->qw;
+    quaternion.x = (float)hm10_packet->qx;
+    quaternion.y = (float)hm10_packet->qy;
+    quaternion.z = (float)hm10_packet->qz;
+
+    return TrailGui_QuaternionNormalize(quaternion);
 }
 
 /**
@@ -934,6 +855,8 @@ void TrailGui_RenderPhoneGps(const HM10_DataPacket* hm10_packet,
     snprintf(text, sizeof(text), "LON:%s", value);
     UTIL_LCD_DisplayStringAt(bounding_box.x_min + x_mid, y_mid, (uint8_t *)text, LEFT_MODE);
 }
+
+/* Tilt indicator widget -----------------------------------------------------*/
 
 /**
  * @brief Calculates the gravity-referenced tilt angle of one MPU-6050 sample.
@@ -1150,6 +1073,115 @@ void TrailGui_RenderTiltIndicator(const MPU6050_DataPacket* mpu6050_packet,
     UTIL_LCD_FillCircle(center_x, pivot_y, TRAIL_GUI_TILT_PIVOT_RADIUS_PX, color);
 
     TrailGui_DrawTiltReadout(bounding_box, readout_y, tilt_deg, line_width, color, background_color);
+}
+
+/* Screens -------------------------------------------------------------------*/
+
+/**
+ * @brief Clears the full LCD screen with one solid color.
+ * @param color ARGB8888 LCD color value passed directly to the LCD utility
+ *              driver.
+ * @return None.
+ */
+void TrailGui_ClearScreen(uint32_t color)
+{
+    UTIL_LCD_Clear(color);
+}
+
+/**
+ * @brief Draws the initialization screen with an empty loading bar.
+ * @param total_stage_count Number of equal loading stages in the full
+ *                          initialization sequence. A value of 0 draws only
+ *                          the empty bar frame.
+ * @return None.
+ */
+void TrailGui_DrawLoadingScreen(uint16_t total_stage_count)
+{
+    TrailGui_ClearScreen(UTIL_LCD_COLOR_BLACK);
+
+    UTIL_LCD_SetFont(&Font24);
+    UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_BLACK);
+    UTIL_LCD_DisplayStringAt(TRAIL_GUI_LOADING_TITLE_X,
+                             TRAIL_GUI_LOADING_TITLE_Y,
+                             (uint8_t*)TRAIL_GUI_TITLE,
+                             LEFT_MODE);
+
+    TrailGui_ExpandLoadingBar(0U, total_stage_count);
+}
+
+/**
+ * @brief Renders the loading bar filled to the requested completed stage.
+ * @param completed_stage_count Number of completed initialization stages. Values
+ *                              greater than total_stage_count are clamped.
+ * @param total_stage_count Total number of equal loading stages in the full
+ *                          initialization sequence. A value of 0 draws an
+ *                          empty bar.
+ * @return None.
+ */
+void TrailGui_ExpandLoadingBar(uint16_t completed_stage_count, uint16_t total_stage_count)
+{
+    uint32_t inner_x;
+    uint32_t inner_y;
+    uint32_t inner_width;
+    uint32_t inner_height;
+    uint32_t fill_width = 0U;
+
+    if (completed_stage_count > total_stage_count)
+    {
+        completed_stage_count = total_stage_count;
+    }
+
+    UTIL_LCD_FillRect(TRAIL_GUI_LOADING_BAR_X,
+                      TRAIL_GUI_LOADING_BAR_Y,
+                      TRAIL_GUI_LOADING_BAR_WIDTH,
+                      TRAIL_GUI_LOADING_BAR_HEIGHT,
+                      UTIL_LCD_COLOR_BLACK);
+
+    UTIL_LCD_FillRect(TRAIL_GUI_LOADING_BAR_X,
+                      TRAIL_GUI_LOADING_BAR_Y,
+                      TRAIL_GUI_LOADING_BAR_WIDTH,
+                      TRAIL_GUI_LOADING_BAR_BORDER_WIDTH,
+                      UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(TRAIL_GUI_LOADING_BAR_X,
+                      (uint32_t)(TRAIL_GUI_LOADING_BAR_Y + TRAIL_GUI_LOADING_BAR_HEIGHT -
+                          TRAIL_GUI_LOADING_BAR_BORDER_WIDTH),
+                      TRAIL_GUI_LOADING_BAR_WIDTH,
+                      TRAIL_GUI_LOADING_BAR_BORDER_WIDTH,
+                      UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(TRAIL_GUI_LOADING_BAR_X,
+                      TRAIL_GUI_LOADING_BAR_Y,
+                      TRAIL_GUI_LOADING_BAR_BORDER_WIDTH,
+                      TRAIL_GUI_LOADING_BAR_HEIGHT,
+                      UTIL_LCD_COLOR_WHITE);
+    UTIL_LCD_FillRect(
+        (uint32_t)(TRAIL_GUI_LOADING_BAR_X + TRAIL_GUI_LOADING_BAR_WIDTH - TRAIL_GUI_LOADING_BAR_BORDER_WIDTH),
+        TRAIL_GUI_LOADING_BAR_Y,
+        TRAIL_GUI_LOADING_BAR_BORDER_WIDTH,
+        TRAIL_GUI_LOADING_BAR_HEIGHT,
+        UTIL_LCD_COLOR_WHITE);
+
+    inner_x = TRAIL_GUI_LOADING_BAR_X + TRAIL_GUI_LOADING_BAR_BORDER_WIDTH + TRAIL_GUI_LOADING_BAR_PADDING;
+    inner_y = TRAIL_GUI_LOADING_BAR_Y + TRAIL_GUI_LOADING_BAR_BORDER_WIDTH + TRAIL_GUI_LOADING_BAR_PADDING;
+    inner_width = TRAIL_GUI_LOADING_BAR_WIDTH - (2U * (TRAIL_GUI_LOADING_BAR_BORDER_WIDTH +
+        TRAIL_GUI_LOADING_BAR_PADDING));
+    inner_height = TRAIL_GUI_LOADING_BAR_HEIGHT - (2U * (TRAIL_GUI_LOADING_BAR_BORDER_WIDTH +
+        TRAIL_GUI_LOADING_BAR_PADDING));
+
+    if (total_stage_count > 0U)
+    {
+        fill_width = (inner_width * (uint32_t)completed_stage_count) / (uint32_t)total_stage_count;
+    }
+
+    if (fill_width > inner_width)
+    {
+        fill_width = inner_width;
+    }
+
+    if (fill_width > 0U)
+    {
+        UTIL_LCD_FillRect(inner_x, inner_y, fill_width, inner_height, UTIL_LCD_COLOR_WHITE);
+    }
 }
 
 /**
