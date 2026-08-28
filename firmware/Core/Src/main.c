@@ -126,6 +126,7 @@
 #include "stm32h750b_discovery_lcd.h"
 #include "stm32_lcd.h"
 
+#include <math.h>
 #include <string.h>
 /* USER CODE END Includes */
 
@@ -138,6 +139,25 @@ typedef struct
     uint16_t GPIO_DefaultState;
 } LED_HandleTypeDef;
 
+/**
+ * @brief Lists the tilt alert stages reported to the phone over BLE.
+ *
+ * Values:
+ * - TILT_ALERT_STATE_CLEAR: Tilt is under the warning threshold. The phone is
+ *   not vibrating and a fresh warning crossing may fire again.
+ * - TILT_ALERT_STATE_WARNING: Tilt crossed the warning threshold, so the phone
+ *   was asked for one single vibration. Held so that staying tilted does not
+ *   repeat the buzz on every poll.
+ * - TILT_ALERT_STATE_CRITICAL: Tilt crossed the critical threshold and the
+ *   phone is vibrating continuously. Only falling back under the warning
+ *   threshold releases it, not merely dropping under the critical one.
+ */
+typedef enum
+{
+    TILT_ALERT_STATE_CLEAR = 0,
+    TILT_ALERT_STATE_WARNING,
+    TILT_ALERT_STATE_CRITICAL,
+} TrailHud_TiltAlertState;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -157,11 +177,17 @@ typedef struct
 
 /* Tilt indicator render ---------------------------------------------------*/
 #define TILT_RENDER_MARGIN 6U
-#define TILT_RENDER_UPDATE_PERIOD_MS 100U
+#define TILT_RENDER_UPDATE_PERIOD_MS 500U
 #define TILT_RENDER_LINE_WIDTH TRAIL_GUI_LINE_WIDTH_THIN
 #define TILT_RENDER_LINE_COLOR UTIL_LCD_COLOR_BLACK
 #define TILT_RENDER_CLEAR_COLOR UTIL_LCD_COLOR_WHITE
 
+/* Tilt alert --------------------------------------------------------------*/
+#define TILT_ALERT_WARNING_DEG 20.0f
+#define TILT_ALERT_CRITICAL_DEG 25.0f
+#define TILT_ALERT_PACKET_SINGLE "trailhud:vibrate:once"
+#define TILT_ALERT_PACKET_CONTINUOUS "trailhud:vibrate:start"
+#define TILT_ALERT_PACKET_CLEAR "trailhud:vibrate:stop"
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -190,6 +216,7 @@ osMessageQueueId_t hm10_render_queue;
 static volatile uint8_t hm10_ping_reply_flag = 0U;
 static volatile DebugTerminalMode debug_terminal_mode = DEBUG_TERMINAL_MODE_WAITING;
 static volatile GPIO_PinState hm10_connection_state = GPIO_PIN_RESET;
+static TrailHud_TiltAlertState tilt_alert_state = TILT_ALERT_STATE_CLEAR;
 
 static const LED_HandleTypeDef led_handles[LED_HANDLE_COUNT] = {
     {GPIOD, GPIO_PIN_3, GPIO_PIN_RESET},
@@ -255,6 +282,9 @@ void MainThread(void* argument);
 /* Board helpers */
 static void LED_ToggleSequence(uint32_t delay_ms);
 
+/* Tilt alerts */
+static void TrailHud_UpdateTiltAlert(float tilt_deg);
+
 /* LCD rendering */
 static void TrailHud_ClearPhoneRenderArea(void);
 static void TrailHud_RenderPhoneFrame(const HM10_DataPacket* hm10_packet);
@@ -294,6 +324,66 @@ static void LED_ToggleSequence(uint32_t delay_ms)
         HAL_Delay(delay_ms);
         HAL_GPIO_TogglePin(led_handles[led].GPIO_Port, led_handles[led].GPIO_Pin);
         HAL_Delay(delay_ms);
+    }
+}
+
+/**
+ * @brief Drives the phone vibration alert from one tilt angle.
+ * @param tilt_deg Tilt angle in degrees as reported by
+ *                 TrailGui_TiltAngleFromAccelerometer. The sign only selects
+ *                 the direction of the lean, so the thresholds are compared
+ *                 against its magnitude and fire either way.
+ * @return None.
+ *
+ * Sends a packet only on a stage change, so a steady lean costs one BLE write
+ * rather than one per poll. Crossing TILT_ALERT_WARNING_DEG asks for a single
+ * buzz; crossing TILT_ALERT_CRITICAL_DEG asks for continuous vibration that is
+ * released only once the tilt falls back under TILT_ALERT_WARNING_DEG, so the
+ * two thresholds form a hysteresis band that will not chatter around 25
+ * degrees. Nothing is sent while the BLE link is down.
+ */
+static void TrailHud_UpdateTiltAlert(float tilt_deg)
+{
+    float tilt_magnitude_deg = fabsf(tilt_deg);
+    const char* alert_packet = NULL;
+
+    if (hm10_connection_state != GPIO_PIN_SET)
+    {
+        /* Nothing can be delivered, and the phone drops its own vibration when
+         * the link goes away, so re-arm from a clean slate for the next one. */
+        tilt_alert_state = TILT_ALERT_STATE_CLEAR;
+        return;
+    }
+
+    if (tilt_alert_state == TILT_ALERT_STATE_CRITICAL)
+    {
+        if (tilt_magnitude_deg < TILT_ALERT_WARNING_DEG)
+        {
+            tilt_alert_state = TILT_ALERT_STATE_CLEAR;
+            alert_packet = TILT_ALERT_PACKET_CLEAR "\r\n";
+        }
+    }
+    else if (tilt_magnitude_deg >= TILT_ALERT_CRITICAL_DEG)
+    {
+        tilt_alert_state = TILT_ALERT_STATE_CRITICAL;
+        alert_packet = TILT_ALERT_PACKET_CONTINUOUS "\r\n";
+    }
+    else if (tilt_magnitude_deg >= TILT_ALERT_WARNING_DEG)
+    {
+        if (tilt_alert_state == TILT_ALERT_STATE_CLEAR)
+        {
+            tilt_alert_state = TILT_ALERT_STATE_WARNING;
+            alert_packet = TILT_ALERT_PACKET_SINGLE "\r\n";
+        }
+    }
+    else
+    {
+        tilt_alert_state = TILT_ALERT_STATE_CLEAR;
+    }
+
+    if (alert_packet != NULL)
+    {
+        (void)HM10_SendString(&hm10, alert_packet);
     }
 }
 
@@ -342,7 +432,8 @@ static void TrailHud_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
  * The previous frame is erased before the new one is drawn, so the widget area
  * is left filled with TILT_RENDER_CLEAR_COLOR and never accumulates leftovers
  * from an earlier angle. A failed sensor read leaves the last drawn frame on
- * the LCD instead of blanking the widget.
+ * the LCD instead of blanking the widget. The same sample also drives the
+ * phone vibration alert, so the alert runs at the redraw rate.
  */
 static void TrailHud_RenderTiltFrame(void)
 {
@@ -359,6 +450,7 @@ static void TrailHud_RenderTiltFrame(void)
                                  TILT_RENDER_LINE_WIDTH,
                                  TILT_RENDER_LINE_COLOR,
                                  TILT_RENDER_CLEAR_COLOR);
+    TrailHud_UpdateTiltAlert(TrailGui_TiltAngleFromAccelerometer(&packet));
 }
 
 /**

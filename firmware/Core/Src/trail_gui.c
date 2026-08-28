@@ -87,7 +87,6 @@ static TrailGui_Vector3 TrailGui_Mat3RotateVector(const TrailGui_Matrix3* matrix
 static TrailGui_Quaternion TrailGui_BuildPhoneQuaternion(const HM10_DataPacket* hm10_packet);
 
 /* Tilt indicator widget */
-static float TrailGui_TiltAngleFromAccelerometer(const MPU6050_DataPacket* mpu6050_packet);
 static void TrailGui_DrawTiltReadout(TrailGui_BoundingBox bounding_box,
                                      uint16_t top_y,
                                      float tilt_deg,
@@ -873,7 +872,7 @@ void TrailGui_RenderPhoneGps(const HM10_DataPacket* hm10_packet,
  *         the raw sensor reading to match the installed orientation of the
  *         module.
  */
-static float TrailGui_TiltAngleFromAccelerometer(const MPU6050_DataPacket* mpu6050_packet)
+float TrailGui_TiltAngleFromAccelerometer(const MPU6050_DataPacket* mpu6050_packet)
 {
     /*
      * Two mounting corrections ride along in this one call. Passing X before Y

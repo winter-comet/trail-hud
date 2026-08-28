@@ -174,6 +174,19 @@ void TrailGui_RenderPhoneGps(const HM10_DataPacket* hm10_packet,
                              uint32_t color);
 
 /**
+ * @brief Calculates the gravity-referenced tilt angle of one MPU-6050 sample.
+ * @param mpu6050_packet Parsed MPU-6050 data packet; NULL is not allowed. Only
+ *                       the scaled accelerometer fields are read, so the result
+ *                       is an absolute angle instead of an integrated gyroscope
+ *                       rate that would slowly drift away from level.
+ * @return Tilt angle in degrees in the range [-180, 180]. This is the same
+ *         angle TrailGui_RenderTiltIndicator draws and prints, exposed so that
+ *         callers acting on the tilt share one definition of it rather than
+ *         repeating the mounting corrections folded into the calculation.
+ */
+float TrailGui_TiltAngleFromAccelerometer(const MPU6050_DataPacket* mpu6050_packet);
+
+/**
  * @brief Draws the tilt indicator widget for one MPU-6050 sample.
  * @param mpu6050_packet Parsed MPU-6050 data packet. NULL is not allowed. The
  *                       scaled accelerometer fields are the sole tilt source, so
