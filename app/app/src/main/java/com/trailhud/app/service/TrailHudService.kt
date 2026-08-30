@@ -100,6 +100,7 @@ class TrailHudService : Service() {
         get() = (updateRateSeconds * 1000.0).toLong().coerceAtLeast(100L)
 
     private var bleClient: TrailHudBleClient? = null
+    private val vibrator by lazy { TrailHudVibrator(this) }
     private var broadcastJob: Job? = null
     private var scanJob: Job? = null
     private var locationListener: LocationListener? = null
@@ -176,6 +177,7 @@ class TrailHudService : Service() {
     }
 
     override fun onDestroy() {
+        vibrator.stop()
         disconnectFromDevice()
         unregisterRotationSensor()
         serviceJob.cancel()
@@ -221,6 +223,9 @@ class TrailHudService : Service() {
                 }
             },
             onDisconnected = {
+                // The tilt alert is driven by STM32 edges, so a dropped link
+                // would otherwise leave a continuous alert buzzing forever.
+                vibrator.stop()
                 serviceScope.launch {
                     _uiState.value = _uiState.value.copy(isBleConnected = false, rssiDbm = null)
                     stopBroadcasting()
@@ -231,6 +236,9 @@ class TrailHudService : Service() {
                 serviceScope.launch {
                     _uiState.value = _uiState.value.copy(rssiDbm = rssi)
                 }
+            },
+            onVibrationCommand = { command ->
+                serviceScope.launch { vibrator.handle(command) }
             },
             onError = { error ->
                 Log.e(TAG, error)

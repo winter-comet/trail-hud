@@ -11,6 +11,7 @@ import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
 import android.os.Build
 import com.trailhud.app.protocol.TrailHudPacket
+import com.trailhud.app.protocol.VibrationCommand
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 
@@ -34,6 +35,7 @@ class TrailHudBleClient(
     private val onReady: () -> Unit,
     private val onDisconnected: () -> Unit,
     private val onRssiRead: (Int) -> Unit,
+    private val onVibrationCommand: (VibrationCommand) -> Unit,
     private val onError: (String) -> Unit
 ) {
     private var gatt: BluetoothGatt? = null
@@ -304,7 +306,10 @@ class TrailHudBleClient(
     private fun handleIncomingLine(line: String) {
         if (line == TrailHudPacket.STM32_PING_PACKET) {
             writeLine(TrailHudPacket.PHONE_PING_REPLY_PACKET)
+            return
         }
+
+        TrailHudPacket.parseVibrationCommand(line)?.let(onVibrationCommand)
     }
 
     companion object {
