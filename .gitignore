@@ -10,3 +10,9 @@
 /firmware/.idea
 # Build
 /firmware/build
+
+
+# ---[ Ignored /release files ]---
+
+# Packaged release artifacts
+/release
