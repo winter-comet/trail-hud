@@ -37,6 +37,16 @@ typedef enum
 } DebugTerminalMode;
 
 /**
+ * @brief Creates the mutex that serialises debug terminal output.
+ * @return Nothing.
+ *
+ * Must be called after osKernelInitialize() and before any thread that prints
+ * is started. Printing before this runs is still safe: the terminal is
+ * single-threaded during start-up and the lock is skipped until it exists.
+ */
+void DebugTerminal_Init(void);
+
+/**
  * @brief Formats a floating-point value as fixed-point text with optional left padding.
  * @param out Destination character buffer; NULL is allowed and causes no output.
  * @param out_size Size of out in bytes, including the null terminator; 0 is
@@ -61,7 +71,7 @@ void DebugTerminal_PrintTitle(UART_HandleTypeDef* huart);
  * @brief Converts a debug terminal mode value to a readable mode name.
  * @param mode Debug terminal mode to convert.
  * @return Pointer to a static string: "WAITING", "PINGS", "PHONE DATA",
- *         "MPU-6050 DATA", or "UNKNOWN" for values outside DebugTerminalMode.
+ *         "GYROSCOPE DATA", or "UNKNOWN" for values outside DebugTerminalMode.
  */
 const char* DebugTerminal_ModeName(DebugTerminalMode mode);
 
@@ -83,16 +93,6 @@ void DebugTerminal_PrintLine(UART_HandleTypeDef* huart, const char* text);
  * @return Nothing.
  */
 void DebugTerminal_PrintMode(UART_HandleTypeDef* huart, DebugTerminalMode mode);
-
-/**
- * @brief Parses and prints one BLE phone packet when it matches the expected format.
- * @param huart STM32 HAL UART handle for the debug terminal; NULL is allowed
- *              and causes no output.
- * @param packet Null-terminated BLE packet string; NULL, empty, and
- *               unrecognized packets are ignored.
- * @return Nothing.
- */
-void DebugTerminal_ParsePhonePacket(UART_HandleTypeDef* huart, const char* packet);
 
 /**
  * @brief Prints one parsed phone data packet as a single aligned terminal line.

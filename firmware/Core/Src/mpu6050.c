@@ -10,7 +10,7 @@
 #define MPU6050_REG_WHO_AM_I 0x75U
 
 #define MPU6050_WHO_AM_I_VALUE 0x68U
-#define MPU6050_SENSOR_DATA_LENGTH 14U
+#define MPU6050_DLPF_CFG_5HZ 0x06U
 
 /**
  * @brief Converts an STM32 HAL I2C status value to an MPU-6050 library status.
@@ -228,6 +228,10 @@ MPU6050_StatusTypeDef MPU6050_Init(MPU6050_HandleTypeDef* mpu6050,
         return status;
     }
 
+    /* Only sets the data-ready and FIFO rate, neither of which this firmware
+     * uses; the rate that matters is the polling interval in MainThread. Left
+     * written so the register is in a known state rather than whatever a warm
+     * reset happened to leave behind. */
     status = MPU6050_WriteRegister(mpu6050, MPU6050_REG_SMPLRT_DIV, 0x07U);
 
     if (status != MPU6050_OK)
@@ -235,7 +239,11 @@ MPU6050_StatusTypeDef MPU6050_Init(MPU6050_HandleTypeDef* mpu6050,
         return status;
     }
 
-    status = MPU6050_WriteRegister(mpu6050, MPU6050_REG_CONFIG, 0x00U);
+    /* The reset default of 0x00 leaves the low-pass filter off and the sensor
+     * bandwidth at 260Hz. Sampled a few times a second on a moving vehicle,
+     * that feeds engine and road vibration straight into the tilt reading, so
+     * the filter is narrowed to 5Hz to sit near the rate the display uses. */
+    status = MPU6050_WriteRegister(mpu6050, MPU6050_REG_CONFIG, MPU6050_DLPF_CFG_5HZ);
 
     if (status != MPU6050_OK)
     {
@@ -253,28 +261,6 @@ MPU6050_StatusTypeDef MPU6050_Init(MPU6050_HandleTypeDef* mpu6050,
 }
 
 /**
- * @brief Updates the default I2C timeout value stored in an MPU-6050 handle.
- * @param mpu6050 Initialized MPU-6050 handle to update; NULL is not allowed.
- * @param timeout_ms Default blocking I2C memory read/write timeout in milliseconds.
- * @return MPU6050_OK on success, MPU6050_INVALID_ARGUMENT if mpu6050 is NULL,
- *         or MPU6050_NOT_INITIALIZED if the handle is not bound to I2C.
- */
-MPU6050_StatusTypeDef MPU6050_SetTimeout(MPU6050_HandleTypeDef* mpu6050,
-                                         uint32_t timeout_ms)
-{
-    MPU6050_StatusTypeDef status = MPU6050_CheckHandle(mpu6050);
-
-    if (status != MPU6050_OK)
-    {
-        return status;
-    }
-
-    mpu6050->timeout_ms = timeout_ms;
-
-    return MPU6050_OK;
-}
-
-/**
  * @brief Reads the current accelerometer, temperature, and gyroscope data packet from the MPU-6050.
  * @param mpu6050 Initialized MPU-6050 handle; NULL is not allowed.
  * @param packet Output packet receiving raw and scaled sensor values; NULL is not allowed.
@@ -289,10 +275,12 @@ MPU6050_StatusTypeDef MPU6050_ReadDataPacket(MPU6050_HandleTypeDef* mpu6050,
     MPU6050_StatusTypeDef status;
     uint8_t data[MPU6050_PACKET_RAW_DATA_LENGTH];
 
+    /* Same constant sizes the buffer and bounds the read, so the two cannot
+     * drift apart into a stack overflow. */
     status = MPU6050_ReadRegisters(mpu6050,
                                    MPU6050_REG_ACCEL_XOUT_H,
                                    data,
-                                   MPU6050_SENSOR_DATA_LENGTH);
+                                   MPU6050_PACKET_RAW_DATA_LENGTH);
 
     if (status != MPU6050_OK)
     {
@@ -305,33 +293,4 @@ MPU6050_StatusTypeDef MPU6050_ReadDataPacket(MPU6050_HandleTypeDef* mpu6050,
     }
 
     return MPU6050_OK;
-}
-
-/**
- * @brief Converts an MPU-6050 status value to a readable constant-name string.
- * @param status MPU-6050 status value to convert.
- * @return Pointer to a static string describing the status; returns
- *         "MPU6050_UNKNOWN_STATUS" for values outside MPU6050_StatusTypeDef.
- */
-const char* MPU6050_StatusToString(MPU6050_StatusTypeDef status)
-{
-    switch (status)
-    {
-        case MPU6050_OK:
-            return "MPU6050_OK";
-        case MPU6050_ERROR:
-            return "MPU6050_ERROR";
-        case MPU6050_TIMEOUT:
-            return "MPU6050_TIMEOUT";
-        case MPU6050_BUSY:
-            return "MPU6050_BUSY";
-        case MPU6050_INVALID_ARGUMENT:
-            return "MPU6050_INVALID_ARGUMENT";
-        case MPU6050_NOT_INITIALIZED:
-            return "MPU6050_NOT_INITIALIZED";
-        case MPU6050_DEVICE_NOT_FOUND:
-            return "MPU6050_DEVICE_NOT_FOUND";
-        default:
-            return "MPU6050_UNKNOWN_STATUS";
-    }
 }

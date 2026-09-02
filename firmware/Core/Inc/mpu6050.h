@@ -71,16 +71,6 @@ MPU6050_StatusTypeDef MPU6050_Init(MPU6050_HandleTypeDef* mpu6050,
                                    uint16_t device_address);
 
 /**
- * @brief Updates the default I2C timeout value stored in an MPU-6050 handle.
- * @param mpu6050 Initialized MPU-6050 handle to update; NULL is not allowed.
- * @param timeout_ms Default blocking I2C memory read/write timeout in milliseconds.
- * @return MPU6050_OK on success, MPU6050_INVALID_ARGUMENT if mpu6050 is NULL,
- *         or MPU6050_NOT_INITIALIZED if the handle is not bound to I2C.
- */
-MPU6050_StatusTypeDef MPU6050_SetTimeout(MPU6050_HandleTypeDef* mpu6050,
-                                         uint32_t timeout_ms);
-
-/**
  * @brief Reads the current accelerometer, temperature, and gyroscope data packet from the MPU-6050.
  * @param mpu6050 Initialized MPU-6050 handle; NULL is not allowed.
  * @param packet Output packet receiving raw and scaled sensor values; NULL is not allowed.
@@ -91,14 +81,6 @@ MPU6050_StatusTypeDef MPU6050_SetTimeout(MPU6050_HandleTypeDef* mpu6050,
  */
 MPU6050_StatusTypeDef MPU6050_ReadDataPacket(MPU6050_HandleTypeDef* mpu6050,
                                              MPU6050_DataPacket* packet);
-
-/**
- * @brief Converts an MPU-6050 status value to a readable constant-name string.
- * @param status MPU-6050 status value to convert.
- * @return Pointer to a static string describing the status; returns
- *         "MPU6050_UNKNOWN_STATUS" for values outside MPU6050_StatusTypeDef.
- */
-const char* MPU6050_StatusToString(MPU6050_StatusTypeDef status);
 
 #ifdef __cplusplus
 }

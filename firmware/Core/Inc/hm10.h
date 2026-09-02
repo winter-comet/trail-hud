@@ -25,6 +25,8 @@ extern "C" {
  * - HM10_INVALID_ARGUMENT: One or more arguments were invalid, such as a NULL
  *   pointer where NULL is not allowed or a value that cannot fit the command.
  * - HM10_NOT_INITIALIZED: The HM-10 handle exists but is not bound to a UART.
+ * - HM10_INVALID_PACKET: Bytes were received but did not match the phone data
+ *   packet format.
  */
 typedef enum
 {
@@ -64,19 +66,6 @@ typedef struct
 HM10_StatusTypeDef HM10_Init(HM10_HandleTypeDef* hm10, UART_HandleTypeDef* huart);
 
 /**
- * @brief Updates the default UART timeout values stored in an HM-10 handle.
- * @param hm10 Initialized HM-10 handle to update; NULL is not allowed.
- * @param timeout_ms Default blocking transmit/receive timeout in milliseconds.
- * @param inter_byte_timeout_ms Timeout in milliseconds used between bytes during
- *                              variable-length reads.
- * @return HM10_OK on success, HM10_INVALID_ARGUMENT if hm10 is NULL, or
- *         HM10_NOT_INITIALIZED if the handle is not bound to a UART.
- */
-HM10_StatusTypeDef HM10_SetTimeouts(HM10_HandleTypeDef* hm10,
-                                    uint32_t timeout_ms,
-                                    uint32_t inter_byte_timeout_ms);
-
-/**
  * @brief Sends raw bytes to the HM-10 over its configured UART.
  * @param hm10 Initialized HM-10 handle; NULL is not allowed.
  * @param data Pointer to the bytes to transmit; NULL is allowed only when
@@ -103,81 +92,6 @@ HM10_StatusTypeDef HM10_SendBytes(HM10_HandleTypeDef* hm10,
  */
 HM10_StatusTypeDef HM10_SendString(HM10_HandleTypeDef* hm10,
                                    const char* text);
-
-/**
- * @brief Receives an exact number of bytes from the HM-10 over UART.
- * @param hm10 Initialized HM-10 handle; NULL is not allowed.
- * @param buffer Destination buffer for received bytes; NULL is allowed only
- *               when length is 0.
- * @param length Number of bytes to receive; 0 is allowed and receives nothing.
- * @return HM10_OK when all requested bytes are received or length is 0,
- *         HM10_INVALID_ARGUMENT for invalid pointers, HM10_NOT_INITIALIZED if
- *         the handle has no UART, HM10_TIMEOUT if reception times out,
- *         HM10_BUSY if the UART is busy, or HM10_ERROR for a HAL UART error.
- */
-HM10_StatusTypeDef HM10_ReceiveBytes(HM10_HandleTypeDef* hm10,
-                                     uint8_t* buffer,
-                                     uint16_t length);
-
-/**
- * @brief Reads a variable-length packet currently available from the HM-10 UART.
- * @param hm10 Initialized HM-10 handle; NULL is not allowed.
- * @param buffer Destination buffer for received bytes; NULL is not allowed.
- * @param buffer_length Maximum number of bytes to store in buffer; must be
- *                      greater than 0.
- * @param received_length Output pointer that receives the number of bytes read;
- *                        NULL is not allowed and is set to 0 before reading.
- * @param first_byte_timeout_ms Timeout in milliseconds while waiting for the
- *                              first byte.
- * @param inter_byte_timeout_ms Timeout in milliseconds while waiting for each
- *                              following byte after at least one byte arrives.
- * @return HM10_OK when one or more bytes are read or the buffer becomes full,
- *         HM10_TIMEOUT when no first byte arrives in time,
- *         HM10_INVALID_ARGUMENT for invalid pointers or zero buffer length,
- *         HM10_NOT_INITIALIZED if the handle has no UART, HM10_BUSY if the UART
- *         is busy, or HM10_ERROR for a HAL UART error.
- */
-HM10_StatusTypeDef HM10_ReadAvailable(HM10_HandleTypeDef* hm10,
-                                      uint8_t* buffer,
-                                      uint16_t buffer_length,
-                                      uint16_t* received_length,
-                                      uint32_t first_byte_timeout_ms,
-                                      uint32_t inter_byte_timeout_ms);
-
-/**
- * @brief Reads and parses one phone data packet from the HM-10 UART.
- * @param hm10 Initialized HM-10 handle; NULL is not allowed.
- * @param packet Output packet receiving parsed phone data; NULL is not allowed.
- * @return HM10_OK when a packet is read and parsed, HM10_INVALID_PACKET when
- *         bytes are received but do not match the phone packet format,
- *         HM10_INVALID_ARGUMENT for invalid pointers, HM10_NOT_INITIALIZED if
- *         the handle has no UART, HM10_TIMEOUT if no first byte arrives in
- *         time, HM10_BUSY if the UART is busy, or HM10_ERROR for a HAL UART error.
- */
-HM10_StatusTypeDef HM10_ReadDataPacket(HM10_HandleTypeDef* hm10,
-                                       HM10_DataPacket* packet);
-
-/**
- * @brief Converts an HM-10 status value to a readable constant-name string.
- * @param status HM-10 status value to convert.
- * @return Pointer to a static string describing the status; returns
- *         "HM10_UNKNOWN_STATUS" for values outside HM10_StatusTypeDef.
- */
-const char* HM10_StatusToString(HM10_StatusTypeDef status);
-
-/**
- * @brief Reads one byte from the HM-10 UART using a caller-provided timeout.
- * @param hm10 Initialized HM-10 handle; NULL is not allowed.
- * @param byte Output pointer that receives the byte; NULL is not allowed.
- * @param timeout_ms Blocking receive timeout in milliseconds.
- * @return HM10_OK when one byte is received, HM10_INVALID_ARGUMENT for invalid
- *         pointers, HM10_NOT_INITIALIZED if the handle has no UART,
- *         HM10_TIMEOUT if no byte arrives in time, HM10_BUSY if the UART is
- *         busy, or HM10_ERROR for a HAL UART error.
- */
-HM10_StatusTypeDef HM10_ReadByte(HM10_HandleTypeDef *hm10,
-                                 uint8_t *byte,
-                                 uint32_t timeout_ms);
 
 /**
  * @brief Sends the HM-10 reset AT command over UART.
@@ -209,8 +123,9 @@ HM10_StatusTypeDef HM10_SetName(HM10_HandleTypeDef *hm10,
  * @param name New advertised name string; NULL and empty strings are not
  *             allowed, and the formatted AT command must fit in the internal
  *             command buffer.
- * @param reset_settle_delay_ms Delay in milliseconds after sending AT+RESET
- *                              before returning.
+ * @param reset_settle_delay_ms Delay in milliseconds applied twice: once after
+ *                              the name command so the module can store it,
+ *                              and again after AT+RESET before returning.
  * @return HM10_OK when the name command and reset command are transmitted,
  *         HM10_INVALID_ARGUMENT for invalid arguments, HM10_NOT_INITIALIZED if
  *         the handle has no UART, HM10_TIMEOUT if transmission times out,

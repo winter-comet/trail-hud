@@ -38,7 +38,7 @@
   * HM-10 HM-10 AT-09 TXD / UART_TX -> STM32H750B-DK CN2 D11 / PB15 / USART1_RX
   * HM-10 HM-10 AT-09 RXD / UART_RX -> STM32H750B-DK STMod+ P1 pin 9 / PB14 / USART1_TX
   * HM-10 HM-10 AT-09 STATE -> STM32H750B-DK CN6 D2 / PG3
-  * HM-10 HM-10 AT-09 EN -> STM32H750B-DK CN6 D4 / PK1
+  * HM-10 HM-10 AT-09 EN -> STM32H750B-DK PE3
   *
   *
   *=============================================================================
@@ -128,7 +128,9 @@
 
 #include "task.h"
 
+#include <malloc.h>
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 /* USER CODE END Includes */
 
@@ -170,6 +172,7 @@ typedef enum
 #define LED_HANDLE_COUNT 3U
 #define MPU6050_DEBUG_UPDATE_PERIOD_MS 1000U
 #define HM10_DEBUG_UPDATE_PERIOD_MS 1000U
+#define HM10_DROP_REPORT_PERIOD_MS 2000U
 
 /* Phone render ------------------------------------------------------------*/
 #define PHONE_RENDER_MARGIN 6U
@@ -181,6 +184,8 @@ typedef enum
 /* Tilt indicator render ---------------------------------------------------*/
 #define TILT_RENDER_MARGIN 6U
 #define TILT_RENDER_UPDATE_PERIOD_MS 500U
+#define TILT_SAMPLE_PERIOD_MS 50U
+#define TILT_FILTER_ALPHA 0.25f
 #define TILT_RENDER_LINE_WIDTH TRAIL_GUI_LINE_WIDTH_THIN
 #define TILT_RENDER_LINE_COLOR UTIL_LCD_COLOR_BLACK
 #define TILT_RENDER_CLEAR_COLOR UTIL_LCD_COLOR_WHITE
@@ -212,13 +217,13 @@ static uint8_t hm10_uart_rx_byte;
 static uint16_t hm10_isr_line_len = 0U;
 static char hm10_isr_line[HM10_DEFAULT_LINE_SIZE];
 
-/* Newest phone packet captured for DEBUG_TERMINAL_MODE_HM10_DATA. Written by
- * the USART1 RX ISR, drained by MainThread. Only the ready flag is volatile:
- * the packet itself is always touched inside a critical section, and
- * vPortEnterCritical() is an ordinary function call, so it already bars the
- * compiler from caching the struct across it. */
-static HM10_DataPacket hm10_debug_packet;
-static volatile uint8_t hm10_debug_packet_ready = 0U;
+/* Set once a line outgrows hm10_isr_line, and cleared at the next newline.
+ * Without it the tail of an over-long line would be parsed as a fresh packet. */
+static uint8_t hm10_isr_line_overflow = 0U;
+
+/* Counts render messages the ISR could not queue. Surfaced by MainThread so
+ * backpressure shows up on the terminal instead of silently losing frames. */
+static volatile uint32_t hm10_render_queue_drops = 0U;
 
 osSemaphoreId_t hm10_top_led_semaphore;
 osSemaphoreId_t hm10_bottom_led_semaphore;
@@ -228,6 +233,17 @@ static volatile uint8_t hm10_ping_reply_flag = 0U;
 static volatile DebugTerminalMode debug_terminal_mode = DEBUG_TERMINAL_MODE_WAITING;
 static volatile GPIO_PinState hm10_connection_state = GPIO_PIN_RESET;
 static TrailHud_TiltAlertState tilt_alert_state = TILT_ALERT_STATE_CLEAR;
+
+/* Set once the LCD is far enough up that TrailHud_Fatal can draw on it. */
+static uint8_t trail_hud_lcd_ready = 0U;
+
+/* Rolling average of the tilt samples, held as a packet so it can be handed
+ * straight to the renderer. Primed by the first successful read. */
+static MPU6050_DataPacket tilt_filtered_packet;
+static uint8_t tilt_filter_primed = 0U;
+
+/* Latches the one-shot warning about packets arriving while HM10_STATE is low. */
+static uint8_t hm10_state_mismatch_reported = 0U;
 
 static const LED_HandleTypeDef led_handles[LED_HANDLE_COUNT] = {
     {GPIOD, GPIO_PIN_3, GPIO_PIN_RESET},
@@ -292,6 +308,7 @@ void MainThread(void* argument);
 /* USER CODE BEGIN PFP */
 /* Board helpers */
 static void LED_ToggleSequence(uint32_t delay_ms);
+static void TrailHud_Fatal(const char* reason);
 
 /* Tilt alerts */
 static void TrailHud_UpdateTiltAlert(float tilt_deg);
@@ -299,14 +316,15 @@ static void TrailHud_UpdateTiltAlert(float tilt_deg);
 /* LCD rendering */
 static void TrailHud_ClearPhoneRenderArea(void);
 static void TrailHud_RenderPhoneFrame(const HM10_DataPacket* hm10_packet);
+static void TrailHud_SampleTilt(uint32_t* last_tick);
 static void TrailHud_RenderTiltFrame(void);
 static void TrailHud_UpdateTiltFrame(uint32_t* last_tick);
 
 /* Debug terminal */
 static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms);
 static void DebugTask_RunPingSequence(volatile DebugTerminalMode* debug_mode);
-static void DebugTask_PrintPhoneData(uint32_t* last_tick);
 static void DebugTask_PrintMpu6050Data(uint32_t* last_tick);
+static void DebugTask_ReportQueueDrops(uint32_t* reported_drops, uint32_t* last_tick);
 
 /* RTOS threads */
 void HM10_TopLEDThread(void* argument);
@@ -318,18 +336,45 @@ void HM10_Thread(void* argument);
 /* USER CODE BEGIN 0 */
 
 /**
+ * @brief Reports an unrecoverable start-up failure, then halts.
+ * @param reason Short description of what failed; NULL is allowed and is
+ *               printed as "(null)".
+ * @return Never returns.
+ *
+ * Error_Handler() disables interrupts and spins, so on its own a failed sensor
+ * leaves the loading bar frozen with nothing to explain it. Reporting has to
+ * happen before that: the debug UART is brought up before the LCD and both
+ * modules, so it can describe every failure the board can survive long enough
+ * to notice, and the LCD carries the same text once it is available.
+ */
+static void TrailHud_Fatal(const char* reason)
+{
+    DebugTerminal_PrintLine(&huart3, reason);
+
+    if (trail_hud_lcd_ready != 0U)
+    {
+        UTIL_LCD_SetFont(&Font12);
+        UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_RED);
+        UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_BLACK);
+        UTIL_LCD_DisplayStringAt(TRAIL_GUI_SCREEN_MARGIN,
+                                 TRAIL_GUI_SCREEN_HEIGHT - 20U,
+                                 (uint8_t*)((reason != NULL) ? reason : "(null)"),
+                                 LEFT_MODE);
+    }
+
+    Error_Handler();
+}
+
+/**
  * @brief Toggles a LED sequence, toggling all pins, defined in the led_handles array.
- * @param delay_ms Total time in milliseconds the whole sequence takes; split
- *                 evenly between each LED transition.
+ * @param delay_ms Delay in milliseconds held after each individual LED
+ *                 transition. Every LED is switched on for delay_ms and then
+ *                 off for delay_ms before the next one starts, so the whole
+ *                 sequence takes 2 * LED_HANDLE_COUNT * delay_ms.
  * @return None.
  */
 static void LED_ToggleSequence(uint32_t delay_ms)
 {
-    if (LED_HANDLE_COUNT < 1U)
-    {
-        return;
-    }
-
     for (uint16_t led = 0U; led < LED_HANDLE_COUNT; led++)
     {
         HAL_GPIO_TogglePin(led_handles[led].GPIO_Port, led_handles[led].GPIO_Pin);
@@ -412,19 +457,16 @@ static void TrailHud_ClearPhoneRenderArea(void)
 /**
  * @brief Redraws the phone orientation cuboid for one parsed HM-10 packet.
  * @param hm10_packet Parsed HM-10 data packet holding the phone orientation
- *                    quaternion fields; NULL is not allowed. The render is
- *                    skipped when hm10_connection_state indicates the BLE
- *                    link is not currently established.
+ *                    quaternion fields; NULL is not allowed.
  * @return None.
+ *
+ * Deliberately not gated on hm10_connection_state. A packet that arrived and
+ * parsed is proof the link is up, whatever the STATE pin reads, so gating here
+ * could only ever discard data the board actually received.
  */
 static void TrailHud_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
 {
     if (hm10_packet == NULL)
-    {
-        return;
-    }
-
-    if (hm10_connection_state != GPIO_PIN_SET)
     {
         return;
     }
@@ -435,6 +477,47 @@ static void TrailHud_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
                              PHONE_RENDER_LINE_WIDTH,
                              PHONE_RENDER_LINE_COLOR);
     TrailGui_RenderPhoneGps(hm10_packet, phone_gps_bounds, UTIL_LCD_COLOR_WHITE);
+}
+
+/**
+ * @brief Samples the MPU-6050 and folds the reading into the tilt average.
+ * @param last_tick Pointer to the HAL tick value recorded at the last sample.
+ *                  NULL is not allowed. Updated on every attempt, whether the
+ *                  sensor read succeeds or fails.
+ * @return None.
+ *
+ * Sampling runs far faster than the widget redraws so the displayed angle is
+ * an average rather than whatever single instant the redraw happened to land
+ * on. The average is taken over the accelerometer components rather than the
+ * derived angle: an exponential average across the +/-180 degree wrap would
+ * drag the needle the long way round through the discontinuity.
+ */
+static void TrailHud_SampleTilt(uint32_t* last_tick)
+{
+    MPU6050_DataPacket packet;
+
+    if ((HAL_GetTick() - *last_tick) < TILT_SAMPLE_PERIOD_MS)
+    {
+        return;
+    }
+
+    *last_tick = HAL_GetTick();
+
+    if (MPU6050_ReadDataPacket(&mpu6050, &packet) != MPU6050_OK)
+    {
+        return;
+    }
+
+    if (tilt_filter_primed != 0U)
+    {
+        packet.accel_x_g = tilt_filtered_packet.accel_x_g +
+            (TILT_FILTER_ALPHA * (packet.accel_x_g - tilt_filtered_packet.accel_x_g));
+        packet.accel_y_g = tilt_filtered_packet.accel_y_g +
+            (TILT_FILTER_ALPHA * (packet.accel_y_g - tilt_filtered_packet.accel_y_g));
+    }
+
+    tilt_filtered_packet = packet;
+    tilt_filter_primed = 1U;
 }
 
 /**
@@ -449,20 +532,18 @@ static void TrailHud_RenderPhoneFrame(const HM10_DataPacket* hm10_packet)
  */
 static void TrailHud_RenderTiltFrame(void)
 {
-    MPU6050_DataPacket packet;
-
-    if (MPU6050_ReadDataPacket(&mpu6050, &packet) != MPU6050_OK)
+    if (tilt_filter_primed == 0U)
     {
         return;
     }
 
     TrailGui_DrawRoundedRectangle(tilt_render_bounds, 0U, TILT_RENDER_CLEAR_COLOR);
-    TrailGui_RenderTiltIndicator(&packet,
+    TrailGui_RenderTiltIndicator(&tilt_filtered_packet,
                                  tilt_render_bounds,
                                  TILT_RENDER_LINE_WIDTH,
                                  TILT_RENDER_LINE_COLOR,
                                  TILT_RENDER_CLEAR_COLOR);
-    TrailHud_UpdateTiltAlert(TrailGui_TiltAngleFromAccelerometer(&packet));
+    TrailHud_UpdateTiltAlert(TrailGui_TiltAngleFromAccelerometer(&tilt_filtered_packet));
 }
 
 /**
@@ -494,8 +575,9 @@ static void TrailHud_UpdateTiltFrame(uint32_t* last_tick)
 static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms)
 {
     uint32_t start_tick = HAL_GetTick();
-    hm10_ping_reply_flag = 0U;
 
+    /* The caller arms hm10_ping_reply_flag before it transmits. Clearing it
+     * here would discard a reply that had already arrived. */
     while ((HAL_GetTick() - start_tick) < timeout_ms)
     {
         if (hm10_ping_reply_flag != 0U)
@@ -527,6 +609,11 @@ static void DebugTask_RunPingSequence(volatile DebugTerminalMode* debug_mode)
 
         if (hm10_connection_state == GPIO_PIN_SET)
         {
+            /* Armed before transmitting: a reply that lands while the ping is
+             * still on the wire would otherwise be cleared by the waiter and
+             * reported as no reply at all. */
+            hm10_ping_reply_flag = 0U;
+
             if (HM10_SendString(&hm10, DEBUG_TERMINAL_PING_PACKET "\r\n") == HM10_OK)
             {
                 reply_received = DebugTask_WaitForPingReply(DEBUG_TERMINAL_PING_TIMEOUT_MS);
@@ -542,47 +629,42 @@ static void DebugTask_RunPingSequence(volatile DebugTerminalMode* debug_mode)
 }
 
 /**
- * @brief Prints the newest captured phone data packet at a periodic interval.
- * @param last_tick Pointer to the HAL tick value recorded at the last print.
- *                  NULL is not allowed. Updated only when a packet is actually
- *                  printed, so the first packet after a silent stretch appears
- *                  without waiting out another full interval.
+ * @brief Reports newly dropped render messages on the debug terminal.
+ * @param reported_drops Pointer to the drop total already printed; NULL is not
+ *                       allowed. Updated once the current total is reported.
+ * @param last_tick Pointer to the HAL tick value recorded at the last report.
+ *                  NULL is not allowed. Updated after each report.
  * @return None.
  *
- * Only a packet captured since the previous print is emitted, so a phone that
- * stopped transmitting leaves the terminal quiet instead of repeating stale
- * values. The interval is what keeps the 9600-baud debug link usable: one
- * formatted packet line is about 145 characters, roughly 150ms of transmit
- * time, so an unthrottled BLE stream would queue up faster than the UART can
- * drain it.
+ * The producers run in interrupt context and cannot block, so a full render
+ * queue silently loses frames. Printing the running total turns that into
+ * something the terminal states plainly instead of an unexplained gap in the
+ * rendering. The interval matters as much as the count: a queue that stays
+ * full would otherwise generate a report per loop pass and saturate the
+ * 9600-baud debug link.
  */
-static void DebugTask_PrintPhoneData(uint32_t* last_tick)
+static void DebugTask_ReportQueueDrops(uint32_t* reported_drops, uint32_t* last_tick)
 {
-    HM10_DataPacket packet;
-    uint8_t packet_ready;
+    char text[48];
+    uint32_t drops;
 
-    if ((HAL_GetTick() - *last_tick) < HM10_DEBUG_UPDATE_PERIOD_MS)
+    if ((HAL_GetTick() - *last_tick) < HM10_DROP_REPORT_PERIOD_MS)
     {
         return;
     }
 
-    /* USART1 preempts MainThread and HM10_DataPacket is far too wide to read
-     * atomically, so mask the ISR for the copy. Without this the terminal
-     * could print a packet stitched together from two different BLE lines. */
-    taskENTER_CRITICAL();
-    packet_ready = hm10_debug_packet_ready;
-    packet = hm10_debug_packet;
-    hm10_debug_packet_ready = 0U;
-    taskEXIT_CRITICAL();
+    drops = hm10_render_queue_drops;
 
-    if (packet_ready == 0U)
+    if (drops == *reported_drops)
     {
         return;
     }
 
-    DebugTerminal_PrintPhonePacket(&huart3, &packet);
-
+    *reported_drops = drops;
     *last_tick = HAL_GetTick();
+
+    snprintf(text, sizeof(text), "BLE: dropped %lu render packets", (unsigned long)drops);
+    DebugTerminal_PrintLine(&huart3, text);
 }
 
 /**
@@ -648,13 +730,20 @@ void HM10_BottomLEDThread(void* argument)
 }
 
 /**
- * @brief Consumes hm10RenderInstructionQueue and applies each message to the LCD/debug terminal.
+ * @brief Parses queued BLE lines and applies each message to the LCD/debug terminal.
  * @param argument Does not impact the result.
  * @return None.
+ *
+ * Phone packets arrive as raw text and are parsed here, in task context. The
+ * PHONE DATA terminal output is emitted from this thread too, throttled to
+ * HM10_DEBUG_UPDATE_PERIOD_MS: one formatted line costs roughly 150ms of
+ * transmit time at 9600 baud, so an unthrottled BLE stream would queue up
+ * faster than the debug UART can drain it.
  */
 void HM10_Thread(void* argument)
 {
     TrailGui_RenderWidgetPacket packet;
+    uint32_t last_phone_print_tick = HAL_GetTick() - HM10_DEBUG_UPDATE_PERIOD_MS;
 
     while (1)
     {
@@ -664,8 +753,38 @@ void HM10_Thread(void* argument)
         switch (packet.widget_state)
         {
         case RENDER_WIDGET_STATE_ACTIVE:
-            TrailHud_RenderPhoneFrame(&packet.hm10_packet);
+        {
+            HM10_DataPacket data_packet;
+
+            /* Parsed here rather than in the USART1 ISR. HM10_ParseDataPacket
+             * runs eight strtod calls, and strtod reaches _Balloc and the libc
+             * malloc behind it, which this build leaves unguarded. Task context
+             * also gives it a 4KB stack instead of the 1KB main stack that every
+             * interrupt shares. */
+            if (HM10_ParseDataPacket(packet.line, &data_packet) == 0U)
+            {
+                break;
+            }
+
+            if ((hm10_connection_state != GPIO_PIN_SET) &&
+                (hm10_state_mismatch_reported == 0U))
+            {
+                hm10_state_mismatch_reported = 1U;
+                DebugTerminal_PrintLine(&huart3,
+                                        "BLE: packets arriving while HM10_STATE reads low, check PG3");
+            }
+
+            TrailHud_RenderPhoneFrame(&data_packet);
+
+            if ((debug_terminal_mode == DEBUG_TERMINAL_MODE_HM10_DATA) &&
+                ((HAL_GetTick() - last_phone_print_tick) >= HM10_DEBUG_UPDATE_PERIOD_MS))
+            {
+                DebugTerminal_PrintPhonePacket(&huart3, &data_packet);
+                last_phone_print_tick = HAL_GetTick();
+            }
+
             break;
+        }
 
         case RENDER_WIDGET_STATE_CONNECTED:
             DebugTerminal_PrintLine(&huart3, "BLE: connection established");
@@ -696,35 +815,26 @@ void HM10_Thread(void* argument)
 void MainThread(void* argument)
 {
     uint32_t last_mpu6050_tick = HAL_GetTick() - MPU6050_DEBUG_UPDATE_PERIOD_MS;
-    uint32_t last_hm10_tick = HAL_GetTick() - HM10_DEBUG_UPDATE_PERIOD_MS;
     uint32_t last_tilt_tick = HAL_GetTick();
-    DebugTerminalMode last_debug_mode = debug_terminal_mode;
+    uint32_t last_tilt_sample_tick = HAL_GetTick();
+    uint32_t last_drop_report_tick = HAL_GetTick();
+    uint32_t reported_queue_drops = 0U;
 
     DebugTerminal_PrintMode(&huart3, debug_terminal_mode);
 
     while (1)
     {
         DebugTerminal_HandleInput(&huart3, &debug_terminal_mode);
+        TrailHud_SampleTilt(&last_tilt_sample_tick);
         TrailHud_UpdateTiltFrame(&last_tilt_tick);
+        DebugTask_ReportQueueDrops(&reported_queue_drops, &last_drop_report_tick);
 
-        if (debug_terminal_mode != last_debug_mode)
-        {
-            last_debug_mode = debug_terminal_mode;
-
-            taskENTER_CRITICAL();
-            hm10_debug_packet_ready = 0U;
-            taskEXIT_CRITICAL();
-
-            last_hm10_tick = HAL_GetTick() - HM10_DEBUG_UPDATE_PERIOD_MS;
-        }
-
+        /* PHONE DATA has no case here: the packets are parsed and printed by
+         * HM10_Thread as they arrive, so there is nothing to poll for. */
         switch (debug_terminal_mode)
         {
         case DEBUG_TERMINAL_MODE_PINGS:
             DebugTask_RunPingSequence(&debug_terminal_mode);
-            break;
-        case DEBUG_TERMINAL_MODE_HM10_DATA:
-            DebugTask_PrintPhoneData(&last_hm10_tick);
             break;
         case DEBUG_TERMINAL_MODE_MPU6050_DATA:
             DebugTask_PrintMpu6050Data(&last_mpu6050_tick);
@@ -776,7 +886,7 @@ int main(void)
     /* LCD Init ----------------------------------------------------------------*/
     if (BSP_LCD_Init(TRAIL_HUD_LCD_INSTANCE, LCD_ORIENTATION_LANDSCAPE) != BSP_ERROR_NONE)
     {
-        Error_Handler();
+        TrailHud_Fatal("FATAL: LCD init failed");
     }
 
     BSP_LCD_DisplayOn(TRAIL_HUD_LCD_INSTANCE);
@@ -784,6 +894,7 @@ int main(void)
     BSP_LCD_SetActiveLayer(TRAIL_HUD_LCD_INSTANCE, 0U);
     UTIL_LCD_SetFuncDriver(&LCD_Driver);
     UTIL_LCD_SetLayer(0U);
+    trail_hud_lcd_ready = 1U;
     TrailGui_DrawLoadingScreen(TRAIL_HUD_LOADING_STAGE_COUNT);
 
     DebugTerminal_PrintLine(&huart3, "DEBUG: initialized LCD");
@@ -792,16 +903,27 @@ int main(void)
     /* HM-10 Init --------------------------------------------------------------*/
     if (HM10_Init(&hm10, &huart1) != HM10_OK)
     {
-        Error_Handler();
+        TrailHud_Fatal("FATAL: HM-10 handle init failed");
     }
 
     if (HM10_SetNameAndReset(&hm10, "TRAIL-HUD", 1000U) != HM10_OK)
     {
-        Error_Handler();
+        TrailHud_Fatal("FATAL: HM-10 not responding on USART1");
     }
 
     HAL_NVIC_SetPriority(USART1_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(USART1_IRQn);
+
+    /* Armed here rather than alongside the RTOS objects, which is several
+     * seconds of LED sequencing and sensor start-up later; anything the phone
+     * sent in that window used to be lost. The receive interrupt only touches
+     * the queue and semaphores through NULL checks, so it is safe this early.
+     * Clearing the overrun flag and reading RDR first discards the byte the
+     * module's own reset reply leaves sitting in the register, which would
+     * otherwise become the first character of the first line. */
+    __HAL_UART_CLEAR_OREFLAG(&huart1);
+    (void)huart1.Instance->RDR;
+    HAL_UART_Receive_IT(&huart1, &hm10_uart_rx_byte, 1U);
 
     DebugTerminal_PrintLine(&huart3, "DEBUG: initialized HM-10 on USART1");
     TrailGui_ExpandLoadingBar(2U, TRAIL_HUD_LOADING_STAGE_COUNT);
@@ -809,15 +931,15 @@ int main(void)
     /* MPU6050 Init ------------------------------------------------------------*/
     if (MPU6050_Init(&mpu6050, &hi2c4, MPU6050_DEFAULT_I2C_ADDRESS) != MPU6050_OK)
     {
-        Error_Handler();
+        TrailHud_Fatal("FATAL: MPU-6050 not responding on I2C4");
     }
 
     DebugTerminal_PrintLine(&huart3, "DEBUG: initialized MPU-6050 on I2C4");
     TrailGui_ExpandLoadingBar(3U, TRAIL_HUD_LOADING_STAGE_COUNT);
 
     /* LED Init ----------------------------------------------------------------*/
+    /* GPIOD is already clocked by MX_GPIO_Init(). */
     __HAL_RCC_GPIOC_CLK_ENABLE();
-    __HAL_RCC_GPIOD_CLK_ENABLE();
     __HAL_RCC_GPIOI_CLK_ENABLE();
     __HAL_RCC_GPIOJ_CLK_ENABLE();
 
@@ -839,6 +961,9 @@ int main(void)
     HAL_Delay(1000U);
 
     TrailGui_DrawDefaultScreen();
+
+    uint32_t tilt_prime_tick = HAL_GetTick() - TILT_SAMPLE_PERIOD_MS;
+    TrailHud_SampleTilt(&tilt_prime_tick);
     TrailHud_RenderTiltFrame();
     TrailGui_DrawBoundingRectangle(phone_render_padding_bounds, 10U, UTIL_LCD_COLOR_WHITE);
     TrailGui_DrawBoundingRectangle(phone_gps_padding_bounds, 10U, UTIL_LCD_COLOR_WHITE);
@@ -854,6 +979,7 @@ int main(void)
 
     /* Init scheduler */
     osKernelInitialize();
+    DebugTerminal_Init();
 
     /* USER CODE BEGIN RTOS_MUTEX */
     /* add mutexes, ... */
@@ -862,6 +988,11 @@ int main(void)
     /* USER CODE BEGIN RTOS_SEMAPHORES */
     hm10_top_led_semaphore = osSemaphoreNew(1, 0, NULL);
     hm10_bottom_led_semaphore = osSemaphoreNew(1, 0, NULL);
+
+    if ((hm10_top_led_semaphore == NULL) || (hm10_bottom_led_semaphore == NULL))
+    {
+        TrailHud_Fatal("FATAL: LED semaphore allocation failed");
+    }
     /* USER CODE END RTOS_SEMAPHORES */
 
     /* USER CODE BEGIN RTOS_TIMERS */
@@ -870,7 +1001,11 @@ int main(void)
 
     /* USER CODE BEGIN RTOS_QUEUES */
     hm10_render_queue = osMessageQueueNew(16, sizeof(TrailGui_RenderWidgetPacket), NULL);
-    HAL_UART_Receive_IT(&huart1, &hm10_uart_rx_byte, 1U);
+
+    if (hm10_render_queue == NULL)
+    {
+        TrailHud_Fatal("FATAL: render queue allocation failed");
+    }
 
     hm10_connection_state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
     DebugTerminal_PrintLine(&huart3,
@@ -878,7 +1013,7 @@ int main(void)
                                 ? "BLE: connection established"
                                 : "BLE: connection terminated");
 
-    TrailGui_RenderWidgetPacket initial_render_packet;
+    TrailGui_RenderWidgetPacket initial_render_packet = {0};
     initial_render_packet.widget_state = (hm10_connection_state == GPIO_PIN_SET)
                                               ? RENDER_WIDGET_STATE_CONNECTED
                                               : RENDER_WIDGET_STATE_IDLE;
@@ -889,10 +1024,13 @@ int main(void)
     /* USER CODE END RTOS_QUEUES */
 
     /* USER CODE BEGIN RTOS_THREADS */
-    osThreadNew(HM10_TopLEDThread, NULL, NULL);
-    osThreadNew(HM10_BottomLEDThread, NULL, NULL);
-    osThreadNew(HM10_Thread, NULL, &HM10Thread_attributes);
-    osThreadNew(MainThread, NULL, &MainThread_attributes);
+    if ((osThreadNew(HM10_TopLEDThread, NULL, NULL) == NULL) ||
+        (osThreadNew(HM10_BottomLEDThread, NULL, NULL) == NULL) ||
+        (osThreadNew(HM10_Thread, NULL, &HM10Thread_attributes) == NULL) ||
+        (osThreadNew(MainThread, NULL, &MainThread_attributes) == NULL))
+    {
+        TrailHud_Fatal("FATAL: thread allocation failed");
+    }
     /* USER CODE END RTOS_THREADS */
 
     /* USER CODE BEGIN RTOS_EVENTS */
@@ -1149,6 +1287,35 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 /**
+ * @brief Serialises newlib heap access against the FreeRTOS scheduler.
+ * @param reent Reentrancy structure supplied by newlib; not used.
+ * @return None.
+ *
+ * newlib ships __retarget_lock_acquire_recursive as an empty stub, so the libc
+ * heap had no mutual exclusion at all. It is reachable from more places than it
+ * looks: strtod calls _Balloc for its bigint path, and snprintf can allocate
+ * too, so two threads could interleave inside malloc and corrupt the heap.
+ * Suspending the scheduler is sufficient only because the BLE receive path no
+ * longer parses in interrupt context; nothing may call this from an ISR.
+ */
+void __malloc_lock(struct _reent* reent)
+{
+    (void)reent;
+    vTaskSuspendAll();
+}
+
+/**
+ * @brief Releases the newlib heap lock taken by __malloc_lock.
+ * @param reent Reentrancy structure supplied by newlib; not used.
+ * @return None.
+ */
+void __malloc_unlock(struct _reent* reent)
+{
+    (void)reent;
+    (void)xTaskResumeAll();
+}
+
+/**
  * @brief Re-arms USART1 byte reception after a UART error.
  * @param huart UART handle reporting the error; only USART1 is handled.
  * @return None.
@@ -1192,33 +1359,48 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart)
         {
             hm10_isr_line[hm10_isr_line_len] = '\0';
 
-            if (hm10_isr_line_len > 0U)
+            if ((hm10_isr_line_len > 0U) && (hm10_isr_line_overflow == 0U))
             {
                 if (strcmp(hm10_isr_line, DEBUG_TERMINAL_PING_REPLY) == 0)
                 {
-                    osSemaphoreRelease(hm10_bottom_led_semaphore);
+                    if (hm10_bottom_led_semaphore != NULL)
+                    {
+                        osSemaphoreRelease(hm10_bottom_led_semaphore);
+                    }
+
                     hm10_ping_reply_flag = 1U;
                 }
                 else
                 {
-                    osSemaphoreRelease(hm10_top_led_semaphore);
-                    HM10_DataPacket data_packet;
-
-                    if (HM10_ParseDataPacket(hm10_isr_line, &data_packet) != 0U)
+                    if (hm10_top_led_semaphore != NULL)
                     {
-                        hm10_debug_packet = data_packet;
-                        hm10_debug_packet_ready = 1U;
+                        osSemaphoreRelease(hm10_top_led_semaphore);
+                    }
 
-                        TrailGui_RenderWidgetPacket render_packet;
-                        render_packet.hm10_packet = data_packet;
+                    /* Hand the raw text to HM10_Thread and let it parse there.
+                     * Parsing here would put strtod, and the libc malloc it can
+                     * reach, inside an interrupt running on the 1KB main stack. */
+                    if ((hm10_isr_line_len < TRAIL_GUI_RENDER_LINE_SIZE) &&
+                        (hm10_render_queue != NULL))
+                    {
+                        TrailGui_RenderWidgetPacket render_packet = {0};
+
                         render_packet.widget_state = RENDER_WIDGET_STATE_ACTIVE;
-                        osMessageQueuePut(hm10_render_queue, &render_packet, 0U, 0U);
+                        memcpy(render_packet.line,
+                               hm10_isr_line,
+                               (size_t)hm10_isr_line_len + 1U);
+
+                        if (osMessageQueuePut(hm10_render_queue, &render_packet, 0U, 0U) != osOK)
+                        {
+                            hm10_render_queue_drops++;
+                        }
                     }
                 }
             }
 
             hm10_isr_line_len = 0U;
             hm10_isr_line[0] = '\0';
+            hm10_isr_line_overflow = 0U;
             return;
         }
 
@@ -1228,8 +1410,10 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart)
         }
         else
         {
-            hm10_isr_line_len = 0U;
-            hm10_isr_line[0] = '\0';
+            /* Keep swallowing bytes until the next newline resynchronises the
+             * stream, so the tail of an over-long line is never mistaken for
+             * the start of a fresh packet. */
+            hm10_isr_line_overflow = 1U;
         }
     }
 }
@@ -1253,11 +1437,16 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     {
         hm10_connection_state = HAL_GPIO_ReadPin(HM10_STATE_GPIO_Port, HM10_STATE_Pin);
 
-        TrailGui_RenderWidgetPacket render_packet;
+        TrailGui_RenderWidgetPacket render_packet = {0};
+
         render_packet.widget_state = (hm10_connection_state == GPIO_PIN_SET)
                                           ? RENDER_WIDGET_STATE_CONNECTED
                                           : RENDER_WIDGET_STATE_IDLE;
-        osMessageQueuePut(hm10_render_queue, &render_packet, 0U, 0U);
+
+        if (osMessageQueuePut(hm10_render_queue, &render_packet, 0U, 0U) != osOK)
+        {
+            hm10_render_queue_drops++;
+        }
     }
 }
 

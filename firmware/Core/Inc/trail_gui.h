@@ -78,22 +78,29 @@ typedef enum
     RENDER_WIDGET_STATE_ACTIVE,
 } TrailGui_RenderWidgetState;
 
+/* Longest raw BLE line carried to the render thread, including the null
+ * terminator. A fully populated phone packet is about 82 characters, so this
+ * leaves headroom without making the render queue expensive. */
+#define TRAIL_GUI_RENDER_LINE_SIZE 128U
+
 /**
  * @brief Stores one message posted to hm10RenderInstructionQueue.
  *
  * Fields:
- * - hm10_packet: Parsed phone data packet, stored by value so the message
- *   stays valid after the producer's stack frame returns. The producer is
- *   the USART1 RX ISR, so a pointer to a local variable would dangle by the
- *   time the consumer thread reads it. Only meaningful when widget_state is
- *   RENDER_WIDGET_STATE_ACTIVE.
  * - widget_state: Selects how the consumer should update the LCD and debug
  *   terminal for this message.
+ * - line: Raw, null-terminated BLE line, copied by value so the message stays
+ *   valid after the producer's stack frame returns. The producer is the USART1
+ *   RX ISR, so a pointer to its assembly buffer would be overwritten by the
+ *   following line before the consumer thread read it. The line is parsed by
+ *   the consumer rather than the producer, which is what keeps strtod, and the
+ *   libc malloc it can reach, out of interrupt context. Only meaningful when
+ *   widget_state is RENDER_WIDGET_STATE_ACTIVE.
  */
 typedef struct
 {
-    HM10_DataPacket hm10_packet;
     TrailGui_RenderWidgetState widget_state;
+    char line[TRAIL_GUI_RENDER_LINE_SIZE];
 } TrailGui_RenderWidgetPacket;
 
 /* Drawing primitives --------------------------------------------------------*/

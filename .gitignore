@@ -1,12 +1,12 @@
 # ---[ Ignored /app files ]---
 
 # Default ignored files
-./app/.idea/
+/app/.idea/
 
 
 # ---[ Ignored /firmware files ]---
 
 # Default ignored files
-./firmware/.idea
+/firmware/.idea
 # Build
-./firmware/build
+/firmware/build

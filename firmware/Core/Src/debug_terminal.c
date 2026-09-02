@@ -1,11 +1,60 @@
 #include "debug_terminal.h"
 
+#include "cmsis_os2.h"
+
 #include <stdio.h>
 #include <string.h>
 
 #define DEBUG_TERMINAL_PRINT_SIZE 220U
 
+/* One shared formatting buffer for every printer in this file, so MainThread
+ * and HM10_Thread must not format into it at the same time. The mutex covers
+ * the transmit as well as the formatting, which also stops two complete lines
+ * from interleaving halfway through on the wire. */
 static char debug_print[DEBUG_TERMINAL_PRINT_SIZE];
+static osMutexId_t debug_terminal_mutex;
+
+/**
+ * @brief Creates the mutex that serialises debug terminal output.
+ * @return Nothing.
+ */
+void DebugTerminal_Init(void)
+{
+    static const osMutexAttr_t mutex_attr = {
+        .name = "DebugTerminal",
+        .attr_bits = osMutexPrioInherit,
+    };
+
+    debug_terminal_mutex = osMutexNew(&mutex_attr);
+}
+
+/**
+ * @brief Takes the debug terminal lock when one is available.
+ * @return Nothing.
+ *
+ * The start-up banner and the boot stage lines are printed before the
+ * scheduler runs, where acquiring would block forever. Nothing else is
+ * printing at that point, so skipping the lock is safe.
+ */
+static void DebugTerminal_Lock(void)
+{
+    if ((debug_terminal_mutex != NULL) && (osKernelGetState() == osKernelRunning))
+    {
+        (void)osMutexAcquire(debug_terminal_mutex, osWaitForever);
+    }
+}
+
+/**
+ * @brief Releases the debug terminal lock when one is held.
+ * @return Nothing.
+ */
+static void DebugTerminal_Unlock(void)
+{
+    if ((debug_terminal_mutex != NULL) && (osKernelGetState() == osKernelRunning))
+    {
+        (void)osMutexRelease(debug_terminal_mutex);
+    }
+}
 
 typedef struct
 {
@@ -99,6 +148,14 @@ void DebugTerminal_FormatFixed(char* out,
     whole = (uint32_t)(scaled_value / scale);
     frac = (uint32_t)(scaled_value % scale);
 
+    if (scaled_value == 0U)
+    {
+        /* The magnitude rounded away entirely at this precision, so a sign
+         * would describe something the reader cannot see: "-0.00" reads as a
+         * negative measurement when every printed digit is zero. */
+        sign = "";
+    }
+
     raw_len = snprintf(raw,
                        sizeof(raw),
                        "%s%lu.%0*lu",
@@ -154,6 +211,25 @@ static uint16_t DebugTerminal_ClampLength(int len, size_t buffer_size)
 }
 
 /**
+ * @brief Transmits the line already formatted into debug_print, then unlocks.
+ * @param huart STM32 HAL UART handle for the debug terminal; NULL is not
+ *              allowed, callers check it before taking the lock.
+ * @param len Length returned by the snprintf that filled debug_print.
+ * @return Nothing.
+ */
+static void DebugTerminal_TransmitAndUnlock(UART_HandleTypeDef* huart, int len)
+{
+    uint16_t tx_len = DebugTerminal_ClampLength(len, sizeof(debug_print));
+
+    if (tx_len != 0U)
+    {
+        HAL_UART_Transmit(huart, (uint8_t*)debug_print, tx_len, 1000U);
+    }
+
+    DebugTerminal_Unlock();
+}
+
+/**
  * @brief Prints one prefixed line to the debug terminal.
  * @param huart STM32 HAL UART handle for the debug terminal; NULL is allowed
  *              and causes no output.
@@ -164,26 +240,20 @@ static uint16_t DebugTerminal_ClampLength(int len, size_t buffer_size)
 void DebugTerminal_PrintLine(UART_HandleTypeDef* huart, const char* text)
 {
     int len;
-    uint16_t tx_len;
 
     if (huart == NULL)
     {
         return;
     }
 
+    DebugTerminal_Lock();
+
     len = snprintf(debug_print,
                    sizeof(debug_print),
                    "> %s\r\n",
                    (text != NULL) ? text : "(null)");
 
-    tx_len = DebugTerminal_ClampLength(len, sizeof(debug_print));
-
-    if (tx_len == 0U)
-    {
-        return;
-    }
-
-    HAL_UART_Transmit(huart, (uint8_t*)debug_print, tx_len, 1000U);
+    DebugTerminal_TransmitAndUnlock(huart, len);
 }
 
 /**
@@ -208,14 +278,14 @@ void DebugTerminal_PrintTitle(UART_HandleTypeDef* huart)
         "| Press 'w'    : WAITING                                   |\r\n"
         "| Press 'p'    : PINGS                                     |\r\n"
         "| Press 'd'    : PHONE DATA                                |\r\n"
-        "| Press 'i'    : MPU-6050 DATA                             |\r\n"
+        "| Press 'i'    : GYROSCOPE DATA                            |\r\n"
         "| Press 'h'    : HELP                                      |\r\n"
         "+----------------------------------------------------------+\r\n"
-        "| WAITING       : no periodic debug output                 |\r\n"
-        "| PINGS         : send 4 BLE pings and wait for replies    |\r\n"
-        "| PHONE DATA    : show formatted phone packets             |\r\n"
-        "| MPU-6050 DATA : show accelerometer and gyroscope packets |\r\n"
-        "| HELP          : print command table, keep current mode   |\r\n"
+        "| WAITING        : no periodic debug output                |\r\n"
+        "| PINGS          : send 4 BLE pings and wait for replies   |\r\n"
+        "| PHONE DATA     : show formatted phone packets            |\r\n"
+        "| GYROSCOPE DATA : show accelerometer and gyroscope packets|\r\n"
+        "| HELP           : print command table, keep current mode  |\r\n"
         "+==========================================================+\r\n"
         "\r\n";
 
@@ -224,7 +294,9 @@ void DebugTerminal_PrintTitle(UART_HandleTypeDef* huart)
         return;
     }
 
+    DebugTerminal_Lock();
     HAL_UART_Transmit(huart, (uint8_t*)boot, (uint16_t)(sizeof(boot) - 1U), 2000U);
+    DebugTerminal_Unlock();
 }
 
 /**
@@ -261,7 +333,7 @@ static void DebugTerminal_PrintHelpTable(UART_HandleTypeDef* huart)
         "| Press 'w' or 'W' : WAITING                               |\r\n"
         "| Press 'p' or 'P' : PINGS                                 |\r\n"
         "| Press 'd' or 'D' : PHONE DATA                            |\r\n"
-        "| Press 'i' or 'I' : MPU-6050 DATA                         |\r\n"
+        "| Press 'i' or 'I' : GYROSCOPE DATA                        |\r\n"
         "| Press 'h' or 'H' : HELP                                  |\r\n"
         "+----------------------------------------------------------+\r\n"
         "| HELP prints command table and keeps current mode         |\r\n"
@@ -273,10 +345,12 @@ static void DebugTerminal_PrintHelpTable(UART_HandleTypeDef* huart)
         return;
     }
 
+    DebugTerminal_Lock();
     HAL_UART_Transmit(huart,
                       (uint8_t*)command_table,
                       (uint16_t)(sizeof(command_table) - 1U),
                       2000U);
+    DebugTerminal_Unlock();
 }
 
 /**
@@ -294,7 +368,6 @@ void DebugTerminal_PrintPhonePacket(UART_HandleTypeDef* huart,
                                     const HM10_DataPacket* packet)
 {
     int len;
-    uint16_t tx_len;
     char lat[20];
     char lon[20];
     char alt[16];
@@ -326,6 +399,8 @@ void DebugTerminal_PrintPhonePacket(UART_HandleTypeDef* huart,
         snprintf(hacc, sizeof(hacc), "%7s", "n/a");
     }
 
+    DebugTerminal_Lock();
+
     len = snprintf(debug_print,
                    sizeof(debug_print),
                    "> BLE     : lat:%s | lon:%s | alt:%s m | hacc:%s m | qw:%s | qx:%s | qy:%s | qz:%s\r\n",
@@ -338,14 +413,7 @@ void DebugTerminal_PrintPhonePacket(UART_HandleTypeDef* huart,
                    qy,
                    qz);
 
-    tx_len = DebugTerminal_ClampLength(len, sizeof(debug_print));
-
-    if (tx_len == 0U)
-    {
-        return;
-    }
-
-    HAL_UART_Transmit(huart, (uint8_t*)debug_print, tx_len, 1000U);
+    DebugTerminal_TransmitAndUnlock(huart, len);
 }
 
 /**
@@ -361,7 +429,6 @@ void DebugTerminal_PrintMpu6050Packet(UART_HandleTypeDef* huart,
                                       const MPU6050_DataPacket* packet)
 {
     int len;
-    uint16_t tx_len;
     char accel_x[16];
     char accel_y[16];
     char accel_z[16];
@@ -383,6 +450,8 @@ void DebugTerminal_PrintMpu6050Packet(UART_HandleTypeDef* huart,
     DebugTerminal_FormatFixed(gyro_z, sizeof(gyro_z), (double)packet->gyro_z_dps, 2U, 9U);
     DebugTerminal_FormatFixed(temp, sizeof(temp), (double)packet->temperature_c, 2U, 7U);
 
+    DebugTerminal_Lock();
+
     len = snprintf(debug_print,
                    sizeof(debug_print),
                    "> MPU-6050: ax:%s g | ay:%s g | az:%s g | gx:%s dps | gy:%s dps | gz:%s dps | temp:%s C\r\n",
@@ -394,53 +463,14 @@ void DebugTerminal_PrintMpu6050Packet(UART_HandleTypeDef* huart,
                    gyro_z,
                    temp);
 
-    tx_len = DebugTerminal_ClampLength(len, sizeof(debug_print));
-
-    if (tx_len == 0U)
-    {
-        return;
-    }
-
-    HAL_UART_Transmit(huart, (uint8_t*)debug_print, tx_len, 1000U);
-}
-
-/**
- * @brief Parses and prints one BLE phone packet when it matches the expected format.
- * @param huart STM32 HAL UART handle for the debug terminal; NULL is allowed
- *              and causes no output.
- * @param packet Null-terminated BLE packet string; NULL, empty, and
- *               unrecognized packets are ignored.
- * @return Nothing.
- */
-void DebugTerminal_ParsePhonePacket(UART_HandleTypeDef* huart, const char* packet)
-{
-    size_t packet_len;
-    HM10_DataPacket parsed_packet;
-
-    if ((huart == NULL) || (packet == NULL))
-    {
-        return;
-    }
-
-    packet_len = strlen(packet);
-
-    if (packet_len == 0U)
-    {
-        return;
-    }
-
-    if (HM10_ParseDataPacket(packet, &parsed_packet) != 0U)
-    {
-        DebugTerminal_PrintPhonePacket(huart, &parsed_packet);
-        return;
-    }
+    DebugTerminal_TransmitAndUnlock(huart, len);
 }
 
 /**
  * @brief Converts a debug terminal mode value to a readable mode name.
  * @param mode Debug terminal mode to convert.
  * @return Pointer to a static string: "WAITING", "PINGS", "PHONE DATA",
- *         "MPU-6050 DATA", or "UNKNOWN" for values outside DebugTerminalMode.
+ *         "GYROSCOPE DATA", or "UNKNOWN" for values outside DebugTerminalMode.
  */
 const char* DebugTerminal_ModeName(DebugTerminalMode mode)
 {
@@ -468,26 +498,20 @@ const char* DebugTerminal_ModeName(DebugTerminalMode mode)
 void DebugTerminal_PrintMode(UART_HandleTypeDef* huart, DebugTerminalMode mode)
 {
     int len;
-    uint16_t tx_len;
 
     if (huart == NULL)
     {
         return;
     }
 
+    DebugTerminal_Lock();
+
     len = snprintf(debug_print,
                    sizeof(debug_print),
                    "> DEBUG MODE: %s\r\n",
                    DebugTerminal_ModeName(mode));
 
-    tx_len = DebugTerminal_ClampLength(len, sizeof(debug_print));
-
-    if (tx_len == 0U)
-    {
-        return;
-    }
-
-    HAL_UART_Transmit(huart, (uint8_t*)debug_print, tx_len, 1000U);
+    DebugTerminal_TransmitAndUnlock(huart, len);
 }
 
 /**

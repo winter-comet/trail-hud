@@ -1192,9 +1192,9 @@ void TrailGui_DrawDefaultScreen(void)
 {
     TrailGui_BoundingBox olive_background = {
         .x_min = 0U,
-        .x_max = 239U,
+        .x_max = TRAIL_GUI_SCREEN_WIDTH - 1U,
         .y_min = 0U,
-        .y_max = 272U
+        .y_max = TRAIL_GUI_SCREEN_HEIGHT - 1U
     };
 
     TrailGui_BoundingBox gyroscope_background = {
