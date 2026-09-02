@@ -126,6 +126,8 @@
 #include "stm32h750b_discovery_lcd.h"
 #include "stm32_lcd.h"
 
+#include "task.h"
+
 #include <math.h>
 #include <string.h>
 /* USER CODE END Includes */
@@ -167,6 +169,7 @@ typedef enum
 #define TRAIL_HUD_LOADING_STAGE_COUNT 4U
 #define LED_HANDLE_COUNT 3U
 #define MPU6050_DEBUG_UPDATE_PERIOD_MS 1000U
+#define HM10_DEBUG_UPDATE_PERIOD_MS 1000U
 
 /* Phone render ------------------------------------------------------------*/
 #define PHONE_RENDER_MARGIN 6U
@@ -208,6 +211,14 @@ static MPU6050_HandleTypeDef mpu6050;
 static uint8_t hm10_uart_rx_byte;
 static uint16_t hm10_isr_line_len = 0U;
 static char hm10_isr_line[HM10_DEFAULT_LINE_SIZE];
+
+/* Newest phone packet captured for DEBUG_TERMINAL_MODE_HM10_DATA. Written by
+ * the USART1 RX ISR, drained by MainThread. Only the ready flag is volatile:
+ * the packet itself is always touched inside a critical section, and
+ * vPortEnterCritical() is an ordinary function call, so it already bars the
+ * compiler from caching the struct across it. */
+static HM10_DataPacket hm10_debug_packet;
+static volatile uint8_t hm10_debug_packet_ready = 0U;
 
 osSemaphoreId_t hm10_top_led_semaphore;
 osSemaphoreId_t hm10_bottom_led_semaphore;
@@ -294,6 +305,7 @@ static void TrailHud_UpdateTiltFrame(uint32_t* last_tick);
 /* Debug terminal */
 static uint8_t DebugTask_WaitForPingReply(uint32_t timeout_ms);
 static void DebugTask_RunPingSequence(volatile DebugTerminalMode* debug_mode);
+static void DebugTask_PrintPhoneData(uint32_t* last_tick);
 static void DebugTask_PrintMpu6050Data(uint32_t* last_tick);
 
 /* RTOS threads */
@@ -530,6 +542,50 @@ static void DebugTask_RunPingSequence(volatile DebugTerminalMode* debug_mode)
 }
 
 /**
+ * @brief Prints the newest captured phone data packet at a periodic interval.
+ * @param last_tick Pointer to the HAL tick value recorded at the last print.
+ *                  NULL is not allowed. Updated only when a packet is actually
+ *                  printed, so the first packet after a silent stretch appears
+ *                  without waiting out another full interval.
+ * @return None.
+ *
+ * Only a packet captured since the previous print is emitted, so a phone that
+ * stopped transmitting leaves the terminal quiet instead of repeating stale
+ * values. The interval is what keeps the 9600-baud debug link usable: one
+ * formatted packet line is about 145 characters, roughly 150ms of transmit
+ * time, so an unthrottled BLE stream would queue up faster than the UART can
+ * drain it.
+ */
+static void DebugTask_PrintPhoneData(uint32_t* last_tick)
+{
+    HM10_DataPacket packet;
+    uint8_t packet_ready;
+
+    if ((HAL_GetTick() - *last_tick) < HM10_DEBUG_UPDATE_PERIOD_MS)
+    {
+        return;
+    }
+
+    /* USART1 preempts MainThread and HM10_DataPacket is far too wide to read
+     * atomically, so mask the ISR for the copy. Without this the terminal
+     * could print a packet stitched together from two different BLE lines. */
+    taskENTER_CRITICAL();
+    packet_ready = hm10_debug_packet_ready;
+    packet = hm10_debug_packet;
+    hm10_debug_packet_ready = 0U;
+    taskEXIT_CRITICAL();
+
+    if (packet_ready == 0U)
+    {
+        return;
+    }
+
+    DebugTerminal_PrintPhonePacket(&huart3, &packet);
+
+    *last_tick = HAL_GetTick();
+}
+
+/**
  * @brief Reads and prints MPU-6050 sensor data at a fixed periodic interval.
  * @param last_tick Pointer to the HAL tick value recorded at the last print.
  *                  NULL is not allowed. Updated to the current tick after each
@@ -640,7 +696,9 @@ void HM10_Thread(void* argument)
 void MainThread(void* argument)
 {
     uint32_t last_mpu6050_tick = HAL_GetTick() - MPU6050_DEBUG_UPDATE_PERIOD_MS;
+    uint32_t last_hm10_tick = HAL_GetTick() - HM10_DEBUG_UPDATE_PERIOD_MS;
     uint32_t last_tilt_tick = HAL_GetTick();
+    DebugTerminalMode last_debug_mode = debug_terminal_mode;
 
     DebugTerminal_PrintMode(&huart3, debug_terminal_mode);
 
@@ -649,10 +707,24 @@ void MainThread(void* argument)
         DebugTerminal_HandleInput(&huart3, &debug_terminal_mode);
         TrailHud_UpdateTiltFrame(&last_tilt_tick);
 
+        if (debug_terminal_mode != last_debug_mode)
+        {
+            last_debug_mode = debug_terminal_mode;
+
+            taskENTER_CRITICAL();
+            hm10_debug_packet_ready = 0U;
+            taskEXIT_CRITICAL();
+
+            last_hm10_tick = HAL_GetTick() - HM10_DEBUG_UPDATE_PERIOD_MS;
+        }
+
         switch (debug_terminal_mode)
         {
         case DEBUG_TERMINAL_MODE_PINGS:
             DebugTask_RunPingSequence(&debug_terminal_mode);
+            break;
+        case DEBUG_TERMINAL_MODE_HM10_DATA:
+            DebugTask_PrintPhoneData(&last_hm10_tick);
             break;
         case DEBUG_TERMINAL_MODE_MPU6050_DATA:
             DebugTask_PrintMpu6050Data(&last_mpu6050_tick);
@@ -1134,6 +1206,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart)
 
                     if (HM10_ParseDataPacket(hm10_isr_line, &data_packet) != 0U)
                     {
+                        hm10_debug_packet = data_packet;
+                        hm10_debug_packet_ready = 1U;
+
                         TrailGui_RenderWidgetPacket render_packet;
                         render_packet.hm10_packet = data_packet;
                         render_packet.widget_state = RENDER_WIDGET_STATE_ACTIVE;

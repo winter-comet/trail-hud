@@ -280,15 +280,18 @@ static void DebugTerminal_PrintHelpTable(UART_HandleTypeDef* huart)
 }
 
 /**
- * @brief Prints a parsed phone data packet as one aligned debug-terminal line.
+ * @brief Prints one parsed phone data packet as a single aligned terminal line.
  * @param huart STM32 HAL UART handle for the debug terminal; NULL is allowed
  *              and causes no output.
  * @param packet Parsed phone packet to print; NULL is allowed and causes no
- *               output.
+ *               output. Latitude and longitude are printed in degrees,
+ *               altitude and horizontal accuracy in meters, and the
+ *               orientation quaternion as unitless components. A packet that
+ *               carried no horizontal accuracy prints "n/a" for that field.
  * @return Nothing.
  */
-static void DebugTerminal_PrintFormattedPhonePacket(UART_HandleTypeDef* huart,
-                                                    const HM10_DataPacket* packet)
+void DebugTerminal_PrintPhonePacket(UART_HandleTypeDef* huart,
+                                    const HM10_DataPacket* packet)
 {
     int len;
     uint16_t tx_len;
@@ -428,7 +431,7 @@ void DebugTerminal_ParsePhonePacket(UART_HandleTypeDef* huart, const char* packe
 
     if (HM10_ParseDataPacket(packet, &parsed_packet) != 0U)
     {
-        DebugTerminal_PrintFormattedPhonePacket(huart, &parsed_packet);
+        DebugTerminal_PrintPhonePacket(huart, &parsed_packet);
         return;
     }
 }
@@ -513,8 +516,11 @@ void DebugTerminal_HandleInput(UART_HandleTypeDef* huart, volatile DebugTerminal
 
         if (DebugTerminal_IsHelpCommand(rx_byte) != 0U)
         {
+            /* HELP only prints. Both the boot banner and the command table
+             * promise the active mode survives it, so pressing 'h' while
+             * PHONE DATA is running must not silently cancel it. */
             DebugTerminal_PrintHelpTable(huart);
-            *mode = DEBUG_TERMINAL_MODE_WAITING;
+            DebugTerminal_PrintMode(huart, *mode);
             continue;
         }
 

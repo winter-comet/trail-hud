@@ -95,6 +95,20 @@ void DebugTerminal_PrintMode(UART_HandleTypeDef* huart, DebugTerminalMode mode);
 void DebugTerminal_ParsePhonePacket(UART_HandleTypeDef* huart, const char* packet);
 
 /**
+ * @brief Prints one parsed phone data packet as a single aligned terminal line.
+ * @param huart STM32 HAL UART handle for the debug terminal; NULL is allowed
+ *              and causes no output.
+ * @param packet Parsed phone packet to print; NULL is allowed and causes no
+ *               output. Latitude and longitude are printed in degrees,
+ *               altitude and horizontal accuracy in meters, and the
+ *               orientation quaternion as unitless components. A packet that
+ *               carried no horizontal accuracy prints "n/a" for that field.
+ * @return Nothing.
+ */
+void DebugTerminal_PrintPhonePacket(UART_HandleTypeDef* huart,
+                                    const HM10_DataPacket* packet);
+
+/**
  * @brief Prints one formatted MPU-6050 accelerometer and gyroscope packet.
  * @param huart STM32 HAL UART handle for the debug terminal; NULL is allowed
  *              and causes no output.
