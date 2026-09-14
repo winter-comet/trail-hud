@@ -22,8 +22,6 @@ phone to tell you.
         └─────────────────────-───┴───┴────────────────────┴───┘
 ```
 
----
-
 ## What it does
 
 - **Shows your phone's orientation** as a 3D wireframe that turns in real time as you move the phone.
@@ -35,8 +33,6 @@ phone to tell you.
 - **Confirms the link is alive** — two LEDs blink for incoming data and for connection checks.
 
 Everything runs over a single Bluetooth Low Energy connection. No internet connection is needed.
-
----
 
 ## What you need
 
@@ -56,8 +52,6 @@ Everything runs over a single Bluetooth Low Energy connection. No internet conne
 
 - [STM32CubeCLT](https://www.st.com/en/development-tools/stm32cubeclt.html) — provides the compiler, CMake, Ninja and the flashing tool in one install.
 - [Android Studio](https://developer.android.com/studio) — only if you want to build or modify the phone app yourself rather than installing a prebuilt APK.
-
----
 
 ## Wiring
 
@@ -85,8 +79,6 @@ Eight wires. Power both modules from the board, share a common ground, then four
 | AD0        | Common ground rail          | Selects the sensor's address |
 
 The sensor's `INT`, `XDA` and `XCL` pins are not used — leave them unconnected.
-
----
 
 ## Plug and play
 
@@ -144,8 +136,6 @@ Within a second or two you should see:
 Now tilt the board past 20°. Your phone should buzz once. Tilt past 25° and it buzzes continuously
 until you bring it back level.
 
----
-
 ## Reading the display
 
 **Left side — tilt.** A needle showing how far the board is leaning, with the angle printed below it.
@@ -154,8 +144,6 @@ it reflects your bike, not your phone.
 
 **Right side — your phone.** A wireframe box that matches how you're holding the phone, with your
 coordinates below. When no phone is connected it reads `WAITING`.
-
----
 
 ## Common Troubleshooting
 
@@ -169,16 +157,12 @@ The board also prints a running log over its USB port. Open a serial terminal at
 on the ST-Link Virtual COM Port and press `h` for the list of available views — it will tell you
 whether packets are arriving and what they contain.
 
----
-
 ## Repository layout
 
 ```
 firmware/   STM32 firmware — display, sensor, and Bluetooth link
 app/        Android app    — sends position and orientation, receives alerts
 ```
-
----
 
 ## License
 
